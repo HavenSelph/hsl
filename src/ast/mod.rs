@@ -14,6 +14,7 @@ pub enum Operator {
     Minus,
     Star,
     Slash,
+    Mod,
 }
 
 impl TokenKind {
@@ -31,6 +32,7 @@ impl TokenKind {
             TokenKind::Minus => (Operator::Minus, 11, 12),
             TokenKind::Star => (Operator::Star, 12, 13),
             TokenKind::Slash => (Operator::Slash, 12, 13),
+            TokenKind::Percent => (Operator::Mod, 12, 13),
             _ => return None,
         })
     }

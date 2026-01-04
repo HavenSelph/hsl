@@ -17,6 +17,7 @@ pub enum TokenKind {
     RightParen,
     Semicolon,
     Slash,
+    Percent,
     Star,
     StringLiteral,
     Echo,

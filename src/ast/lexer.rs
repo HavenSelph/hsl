@@ -242,13 +242,14 @@ impl<'contents> Lexer<'contents> {
                 '+' => self.make_advance(start, 1, TokenKind::Plus),
                 '-' => self.make_advance(start, 1, TokenKind::Minus),
                 '*' => self.make_advance(start, 1, TokenKind::Star),
+                '%' => self.make_advance(start, 1, TokenKind::Percent),
                 '(' => self.make_advance(start, 1, TokenKind::LeftParen),
                 ')' => self.make_advance(start, 1, TokenKind::RightParen),
                 ';' => self.make_advance(start, 1, TokenKind::Semicolon),
-                // '=' => match self.peek_char() {
-                //     Some('=') => self.make_advance(start, 2, TokenKind::EqualsEquals),
-                //     _ => self.make_advance(start, 1, TokenKind::Equals),
-                // },
+                '=' => match self.peek_char() {
+                    Some('=') => self.make_advance(start, 2, TokenKind::EqualsEquals),
+                    _ => self.make_advance(start, 1, TokenKind::Equals),
+                },
                 // '>' => match self.peek_char() {
                 //     Some('=') => self.make_advance(start, 2, TokenKind::GreaterThanEquals),
                 //     _ => self.make_advance(start, 1, TokenKind::GreaterThan),
