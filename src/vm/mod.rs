@@ -35,12 +35,12 @@ impl VM {
     pub fn run(&mut self, chunk: &mut Chunk) -> Maybe<Value> {
         self.ip = 0;
         while self.ip < chunk.source.len() {
-            let op = chunk.read_op(&mut self.ip);
             if crate::ARGS.trace_execution() {
-                chunk.disassemble_op(op, &mut self.ip.clone())
+                chunk.disassemble_op(&mut self.ip.clone())
             }
+            let op = chunk.read_op(&mut self.ip);
             match op {
-                OpCode::Return => {
+                OpCode::Stop => {
                     return Ok(self.stack.pop().unwrap_or(Value::Nada));
                 }
                 _ => self.run_op(chunk, op)?,
@@ -66,25 +66,59 @@ impl VM {
         }
 
         match op {
-            OpCode::Const => {
-                let val = chunk.read_const(&mut self.ip);
-                self.stack.push(val);
+            OpCode::Pop => {
+                self.stack.pop().unwrap();
+            }
+            OpCode::Dup => {
+                self.stack
+                    .push(self.stack.get(self.stack.len() - 1).unwrap().clone());
+            }
+            OpCode::Swap => {
+                let idx = self.stack.len() - 1;
+                self.stack.swap(idx, idx - 1);
+            }
+
+            OpCode::Jump => {
+                let offset = chunk.read_u16(&mut self.ip);
+                self.ip += offset as usize;
+            }
+            OpCode::JumpIfFalse => {
+                let offset = chunk.read_u16(&mut self.ip);
+                let val = self.stack.pop().unwrap();
+                if val.not()?.bool()? {
+                    self.ip += offset as usize;
+                }
+            }
+            OpCode::Loop => {
+                let offset = chunk.read_u16(&mut self.ip);
+                self.ip -= offset as usize;
+            }
+
+            OpCode::ReadConst => {
+                let val = chunk.read_u8(&mut self.ip) as isize;
+                self.stack.push(Value::Integer(val));
+            }
+            OpCode::LoadConst8 | OpCode::LoadConst16 => {
+                let idx = if matches![op, OpCode::LoadConst8] {
+                    chunk.read_u8(&mut self.ip) as usize
+                } else {
+                    chunk.read_u16(&mut self.ip) as usize
+                };
+                self.stack.push(chunk.get_const(idx));
+            }
+            OpCode::Nada => self.stack.push(Value::Nada),
+            OpCode::True | OpCode::False => {
+                self.stack.push(Value::Boolean(matches![op, OpCode::True]))
             }
 
             OpCode::Add => binary!(Value::add),
             OpCode::Sub => binary!(Value::sub),
             OpCode::Mul => binary!(Value::mul),
             OpCode::Div => binary!(Value::div),
+            OpCode::Mod => binary!(Value::modulo),
             OpCode::Neg => unary!(Value::negate),
-
-            OpCode::Less => binary!(Value::lt),
-            OpCode::Greater => binary!(Value::gt),
-            OpCode::Equal => binary!(Value::equals),
-            OpCode::And => binary!(Value::and),
-            OpCode::Or => binary!(Value::or),
-            OpCode::Not => unary!(Value::not),
             _ => unimplemented!(),
-        }
+        };
         Ok(())
     }
 }
