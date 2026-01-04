@@ -3,7 +3,7 @@
 
 use crate::ast::parser::Parser;
 use crate::repl::Repl;
-use crate::report::{ExitStatus, Maybe, MaybeErrorless, ReportChannel, UnwrapReport};
+use crate::report::{Maybe, ReportChannel};
 use crate::vm::{Compiler, VM};
 use args::ARGS;
 

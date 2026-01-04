@@ -2,7 +2,6 @@ use std::io::{Write, stdin, stdout};
 
 use crate::ast::Node;
 use crate::ast::parser::Parser;
-use crate::ast::span::Span;
 use crate::dprintln;
 use crate::files::push_source;
 use crate::report::{ReportChannel, ReportLevel, UnwrapReport};
