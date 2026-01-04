@@ -384,9 +384,14 @@ impl<'contents> StringParser<'contents> {
                         'b' => buf.push('\u{0008}'),
                         'f' => buf.push('\u{000C}'),
                         '0' => buf.push('\0'),
-                        'u' => {
+                        'a' | 'u' => {
                             let code_start = self.current_index;
-                            for _ in 0..4 {
+                            let length = match escaped {
+                                'a' => 2,
+                                'u' => 4,
+                                _ => unimplemented!(),
+                            };
+                            for _ in 0..length {
                                 match self.current_char {
                                     Some('0'..='9' | 'a'..='f' | 'A'..='F') => self.advance(),
                                     Some(c) => {
