@@ -1,0 +1,7 @@
+/// exit: 0
+assert 7 & 3 == 3, "bitwise and"
+assert 5 | 3 == 7, "bitwise or"
+assert -2 ^ 5 == -5, "bitwise xor - negative number"
+assert 5 ^ 3 == 6, "bitwise xor"
+assert 3 << 2 == 12, "bitwise shift left"
+assert 12 >> 2 == 3, "bitwise shift right"

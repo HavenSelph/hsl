@@ -1,2 +1,3 @@
-/// out: "Hello World!"
-echo "Hello\a20World\a21"
+/// exit: 0
+assert "Hello\a20World\a21" == "Hello World!", "ascii escape"
+assert "Hello\u0020World\u0021" == "Hello World!", "unicode escape"

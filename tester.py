@@ -53,6 +53,15 @@ def get_expected(filename) -> Optional[Expected]:
             if name == "exit":
                 return Expected(Result.EXIT_WITH_CODE, int(value))
             if name == "out":
+                if value.strip() == "":
+                    for ln in file:
+                        if ln.startswith("///"):
+                            if value != "":
+                                value += "\n"
+                            value += ln[3:].strip()
+                            continue
+                        break
+                    value = f'"""{value}"""'
                 return Expected(Result.EXIT_WITH_OUTPUT, value)
             if name == "fail":
                 return Expected(Result.FAIL, value)

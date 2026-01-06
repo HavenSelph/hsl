@@ -1,0 +1,6 @@
+/// exit: 0
+assert !False, "Logical not"
+assert True or False, "Logical or"
+assert !(False or False), "Logical or"
+assert !(False and True), "Logical and"
+assert True or True and False, "Precedence"
