@@ -193,7 +193,7 @@ impl Chunk {
                 };
 
                 println!(
-                    " {:4} ({}{:04})",
+                    " {:4} ({}{:03})",
                     offset,
                     match op {
                         OpCode::Jump => "->",
