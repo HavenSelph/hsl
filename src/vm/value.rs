@@ -228,11 +228,7 @@ impl Value {
     }
 
     pub fn not(&self) -> Maybe<Self> {
-        Ok(match self {
-            Value::Integer(value) => Value::Integer(!*value),
-            Value::Boolean(value) => Value::Boolean(!*value),
-            _ => return Err(unary_operand_error!("!", self)),
-        })
+        Ok(Value::Boolean(!self.as_bool()?))
     }
 
     pub fn negate(&self) -> Maybe<Self> {
@@ -266,9 +262,7 @@ impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (&self, &other) {
             (Value::Integer(lhs), Value::Integer(rhs)) => lhs.eq(rhs),
-            (Value::Integer(lhs), Value::Float(rhs)) => (*lhs as f64).eq(rhs),
             (Value::Float(lhs), Value::Float(rhs)) => lhs.eq(rhs),
-            (Value::Float(lhs), Value::Integer(rhs)) => lhs.eq(&(*rhs as f64)),
             (Value::String(lhs), Value::String(rhs)) => lhs.eq(rhs),
             (_, _) => false,
         }
