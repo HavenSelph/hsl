@@ -54,31 +54,31 @@ impl TokenKind {
     pub fn as_infix(self) -> Option<(Operator, u8, u8)> {
         Some(match self {
             // Lower Precedence
-            TokenKind::Equals => (Operator::Assign, 2, 1),
+            TokenKind::Equals => (Operator::Assign, 1, 2),
 
             TokenKind::Or => (Operator::Or, 3, 4),
-            TokenKind::And => (Operator::And, 4, 5),
+            TokenKind::And => (Operator::And, 5, 6),
 
-            TokenKind::EqualsEquals => (Operator::Equal, 3, 4),
-            TokenKind::BangEquals => (Operator::NotEqual, 3, 4),
-            TokenKind::Greater => (Operator::Greater, 3, 4),
-            TokenKind::GreaterEquals => (Operator::GreaterEqual, 3, 4),
-            TokenKind::Less => (Operator::Less, 3, 4),
-            TokenKind::LessEquals => (Operator::LessEqual, 3, 4),
+            TokenKind::EqualsEquals => (Operator::Equal, 7, 8),
+            TokenKind::BangEquals => (Operator::NotEqual, 7, 8),
+            TokenKind::Greater => (Operator::Greater, 9, 10),
+            TokenKind::GreaterEquals => (Operator::GreaterEqual, 9, 10),
+            TokenKind::Less => (Operator::Less, 9, 10),
+            TokenKind::LessEquals => (Operator::LessEqual, 9, 10),
 
-            TokenKind::Pipe => (Operator::BitwiseOr, 4, 5),
-            TokenKind::Caret => (Operator::BitwiseXor, 5, 6),
-            TokenKind::Ampersand => (Operator::BitwiseAnd, 6, 7),
-            TokenKind::LessLess => (Operator::ShiftLeft, 7, 8),
-            TokenKind::GreaterGreater => (Operator::ShiftRight, 7, 8),
+            TokenKind::Pipe => (Operator::BitwiseOr, 11, 12),
+            TokenKind::Caret => (Operator::BitwiseXor, 13, 14),
+            TokenKind::Ampersand => (Operator::BitwiseAnd, 15, 16),
+            TokenKind::LessLess => (Operator::ShiftLeft, 17, 18),
+            TokenKind::GreaterGreater => (Operator::ShiftRight, 17, 18),
 
-            TokenKind::Plus => (Operator::Add, 8, 9),
-            TokenKind::Minus => (Operator::Subtract, 8, 9),
-            TokenKind::Star => (Operator::Multiply, 9, 10),
-            TokenKind::Slash => (Operator::Divide, 9, 10),
-            TokenKind::Percent => (Operator::Modulo, 9, 10),
+            TokenKind::Plus => (Operator::Add, 19, 20),
+            TokenKind::Minus => (Operator::Subtract, 19, 20),
+            TokenKind::Star => (Operator::Multiply, 21, 22),
+            TokenKind::Slash => (Operator::Divide, 21, 22),
+            TokenKind::Percent => (Operator::Modulo, 21, 22),
 
-            TokenKind::StarStar => (Operator::Power, 19, 18),
+            TokenKind::StarStar => (Operator::Power, 24, 23),
             // Higher Precedence
             _ => return None,
         })
@@ -96,14 +96,23 @@ impl TokenKind {
 pub enum NodeKind {
     Block(Vec<Node>),
     Echo(Box<Node>),
+    If(Box<Node>, Box<Node>, Option<Box<Node>>),
     Assert(Box<Node>, String),
     UnaryOperation(Operator, Box<Node>),
     BinaryOperation(Operator, Box<Node>, Box<Node>),
+    LocalDeclaration(String, Box<Node>),
+    GlobalDeclaration(String, Option<Box<Node>>),
     Identifier(String),
     StringLiteral(String),
     FloatLiteral(f64),
     IntegerLiteral(usize),
     BooleanLiteral(bool),
+}
+
+impl Debug for NodeKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.variant_name())
+    }
 }
 
 impl NodeKind {
@@ -232,6 +241,23 @@ impl<'a> Display for NodeFormatter<'a> {
         let node = self.node;
         write!(f, "{}", node.kind.variant_name())?;
         match &node.kind {
+            NodeKind::If(condition, then_block, else_block) => {
+                write!(f, "{{\n{}\n}}", self.child(condition))?;
+                write!(f, "{{\n{}\n}}", self.child(then_block))?;
+                if let Some(else_block) = else_block {
+                    write!(f, "else {{\n{}\n}}", self.child(else_block))?;
+                }
+            }
+            NodeKind::GlobalDeclaration(name, expr) => {
+                write!(f, "({name:?})")?;
+                if let Some(expr) = expr {
+                    write!(f, " {{\n{}\n}}", self.child(expr))?;
+                }
+            }
+            NodeKind::LocalDeclaration(name, expr) => {
+                write!(f, "({name:?})")?;
+                write!(f, " {{\n{}\n}}", self.child(expr))?;
+            }
             NodeKind::UnaryOperation(op, expr) => {
                 write!(f, "({}) {{\n{}\n}}", op.variant_name(), self.child(expr))?;
             }

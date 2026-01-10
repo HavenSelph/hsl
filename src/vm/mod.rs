@@ -1,18 +1,22 @@
-mod bytecode;
-mod compiler;
-mod value;
-
 use crate::dprintln;
 use crate::report::{Maybe, ReportKind, ReportLevel};
 pub use crate::vm::bytecode::{Chunk, OpCode};
 pub use crate::vm::compiler::Compiler;
 pub use crate::vm::value::Value;
 
-struct VMError(String);
+mod bytecode;
+mod compiler;
+mod value;
+
+enum VMError {
+    GlobalNotFound(String),
+}
 
 impl ReportKind for VMError {
     fn title(&self) -> String {
-        format!("VM Error: {}", self.0)
+        match self {
+            VMError::GlobalNotFound(name) => format!("Global '{}' not found.", name),
+        }
     }
 
     fn level(&self) -> ReportLevel {
@@ -20,9 +24,43 @@ impl ReportKind for VMError {
     }
 }
 
+pub struct Scope {
+    depth: usize,
+    variables: Vec<(usize, Value)>,
+}
+
+impl Scope {
+    pub fn new() -> Self {
+        Self {
+            depth: 0,
+            variables: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self) {
+        self.depth += 1;
+    }
+
+    pub fn pop(&mut self) {
+        self.depth -= 1;
+        self.variables.retain(|var| var.0 <= self.depth);
+    }
+
+    pub fn set(&mut self, idx: usize, value: Value) {
+        if idx == self.variables.len() {
+            self.variables.push((self.depth, value));
+        } else {
+            let v = self.variables.get_mut(idx).expect("Compiler error.");
+            v.1 = value;
+        }
+    }
+}
+
 pub struct VM {
     ip: usize,
     stack: Vec<Value>,
+    globals: Vec<(String, Value)>,
+    scope: Scope,
 }
 
 impl VM {
@@ -30,11 +68,27 @@ impl VM {
         Self {
             ip: 0,
             stack: Vec::new(),
+            globals: Vec::new(),
+            scope: Scope::new(),
         }
     }
 
     pub fn dump_stack(&self) {
         dprintln!("{:#?}", self.stack);
+    }
+
+    pub fn set_global(&mut self, key: &str, value: Value) {
+        match self.globals.iter_mut().find(|v| v.0 == key) {
+            Some((_, val)) => *val = value,
+            None => self.globals.push((key.to_string(), value)),
+        }
+    }
+
+    pub fn get_global(&self, key: &str) -> Maybe<Value> {
+        match self.globals.iter().find(|v| v.0 == key) {
+            Some((_, val)) => Ok(val.clone()),
+            None => Err(VMError::GlobalNotFound(key.to_string()).make().into()),
+        }
     }
 
     pub fn run(&mut self, chunk: &mut Chunk) -> Maybe<Value> {
@@ -107,10 +161,13 @@ impl VM {
                 let offset = chunk.read_u16(&mut self.ip);
                 self.ip -= offset as usize;
             }
-
             OpCode::ReadConst => {
                 let val = chunk.read_u8(&mut self.ip) as isize;
                 self.stack.push(Value::Integer(val));
+            }
+            OpCode::ReadString => {
+                let val = chunk.read_string(&mut self.ip);
+                self.stack.push(Value::String(val));
             }
             OpCode::LoadConst8 | OpCode::LoadConst16 => {
                 let idx = if matches![op, OpCode::LoadConst8] {
@@ -124,6 +181,26 @@ impl VM {
             OpCode::True | OpCode::False => {
                 self.stack.push(Value::Boolean(matches![op, OpCode::True]))
             }
+
+            OpCode::SetLocal => {
+                let idx = chunk.read_u16(&mut self.ip) as usize;
+                self.scope.set(idx, self.stack.last().unwrap().clone());
+            }
+            OpCode::LoadLocal => {
+                let idx = chunk.read_u16(&mut self.ip) as usize;
+                self.stack.push(self.scope.variables[idx].1.clone());
+            }
+            OpCode::LoadGlobal => {
+                let key = chunk.read_string(&mut self.ip);
+                self.stack.push(self.get_global(&key)?);
+            }
+            OpCode::SetGlobal => {
+                let key = chunk.read_string(&mut self.ip);
+                let val = self.stack.last().unwrap().clone();
+                self.set_global(&key, val);
+            }
+            OpCode::PushScope => self.scope.push(),
+            OpCode::PopScope => self.scope.pop(),
 
             OpCode::Add => binary!(Value::add),
             OpCode::Sub => binary!(Value::sub),

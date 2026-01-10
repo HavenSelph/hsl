@@ -160,6 +160,10 @@ impl<'contents> Lexer<'contents> {
                         "or" => TokenKind::Or,
                         "and" => TokenKind::And,
                         "assert" => TokenKind::Assert,
+                        "global" => TokenKind::Global,
+                        "if" => TokenKind::If,
+                        "else" => TokenKind::Else,
+                        "let" => TokenKind::Let,
                         _ => TokenKind::Identifier,
                     };
                     self.make_simple(start, kind)
@@ -242,6 +246,8 @@ impl<'contents> Lexer<'contents> {
                     }
                     _ => self.make_advance(start, 1, TokenKind::Slash),
                 },
+                '{' => self.make_advance(start, 1, TokenKind::LeftBrace),
+                '}' => self.make_advance(start, 1, TokenKind::RightBrace),
                 ';' => self.make_advance(start, 1, TokenKind::Semicolon),
                 '+' => self.make_advance(start, 1, TokenKind::Plus),
                 '-' => self.make_advance(start, 1, TokenKind::Minus),

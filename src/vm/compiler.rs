@@ -1,14 +1,122 @@
 use crate::ast::{Node, NodeKind, Operator};
+use crate::report::{Maybe, ReportKind, ReportSender};
 use crate::vm::Value;
 use crate::vm::bytecode::{Chunk, OpCode};
+use name_variant::NamedVariant;
+use std::fmt::Display;
+
+#[derive(NamedVariant)]
+enum CompileReport {
+    VariableNotFound(String),
+    VariableAlreadyDeclared(String),
+    InvalidAssignmentTarget,
+}
+
+impl ReportKind for CompileReport {
+    fn title(&self) -> String {
+        format!("{}", self.variant_name())
+    }
+
+    fn level(&self) -> crate::report::ReportLevel {
+        crate::report::ReportLevel::Error
+    }
+}
+
+impl Display for CompileReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.variant_name())?;
+        match self {
+            CompileReport::VariableNotFound(name)
+            | CompileReport::VariableAlreadyDeclared(name) => write!(f, ": {}", name),
+            CompileReport::InvalidAssignmentTarget => write!(f, "Invalid assignment target"),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum VariableKind {
+    Local,
+    Global,
+}
+
+struct Variable {
+    kind: VariableKind,
+    name: String,
+    depth: usize,
+    index: usize,
+}
+
+struct VariableStorage {
+    variables: Vec<Variable>,
+    depth: usize,
+}
+
+impl VariableStorage {
+    fn new() -> Self {
+        Self {
+            variables: Vec::new(),
+            depth: 0,
+        }
+    }
+
+    fn locals_count(&self) -> usize {
+        self.variables
+            .iter()
+            .filter(|var| matches![var.kind, VariableKind::Local])
+            .count()
+    }
+
+    fn push_scope(&mut self) {
+        self.depth += 1;
+    }
+
+    // Returns the number of variables removed from the storage.
+    fn pop_scope(&mut self) -> usize {
+        self.depth -= 1;
+        let v = self.variables.len();
+        self.variables.retain(|var| var.depth <= self.depth);
+        v - self.variables.len()
+    }
+
+    fn declare(&mut self, name: String, kind: VariableKind) -> Maybe<()> {
+        for var in self.variables.iter().rev() {
+            if var.depth < self.depth {
+                break;
+            }
+            if var.name == name {
+                return Err(CompileReport::VariableAlreadyDeclared(name).make().into());
+            }
+        }
+        self.variables.push(Variable {
+            kind,
+            name,
+            depth: self.depth,
+            index: self.locals_count(),
+        });
+        Ok(())
+    }
+
+    fn get(&mut self, name: String) -> Maybe<&Variable> {
+        for var in self.variables.iter().rev() {
+            if var.name == name {
+                return Ok(&var);
+            }
+        }
+        Err(CompileReport::VariableNotFound(name).make().into())
+    }
+}
 
 pub struct Compiler {
+    reporter: ReportSender,
+    variables: VariableStorage,
     pub chunk: Chunk,
 }
 
 impl Compiler {
-    pub fn new() -> Self {
+    pub fn new(reporter: ReportSender) -> Self {
         Self {
+            reporter,
+            variables: VariableStorage::new(),
             chunk: Chunk::new(),
         }
     }
@@ -31,14 +139,38 @@ impl Compiler {
                 self.compile_expression(expr);
                 self.chunk.write_op(OpCode::Echo);
             }
+            NodeKind::GlobalDeclaration(name, expr) => {
+                match self.variables.declare(name.clone(), VariableKind::Global) {
+                    Err(err) => self.reporter.report(err.finish().into()),
+                    Ok(()) => (),
+                }
+                if let Some(val) = expr {
+                    self.compile_expression(val);
+                    self.chunk.write_op(OpCode::SetGlobal);
+                    self.chunk.write_string(name);
+                    self.chunk.write_op(OpCode::Pop);
+                }
+            }
+            NodeKind::LocalDeclaration(name, expr) => {
+                match self.variables.declare(name.clone(), VariableKind::Local) {
+                    Err(err) => self.reporter.report(err.finish().into()),
+                    Ok(()) => (),
+                }
+                self.compile_expression(expr);
+                self.chunk.write_op_with_u16(
+                    OpCode::SetLocal,
+                    (self.variables.locals_count() - 1) as u16,
+                );
+                self.chunk.write_op(OpCode::Pop);
+            }
             NodeKind::Assert(expr, message) => {
                 self.compile_expression(expr);
                 self.chunk.write_op(OpCode::Not);
                 self.chunk.write_op(OpCode::JumpIfFalse);
                 let start = self.chunk.source.len() - 1;
-                self.chunk.write_op(OpCode::Nop);
-                self.chunk.write_op(OpCode::Nop);
-                self.chunk.write_const_long(Value::String(message.clone()));
+                self.chunk.write_noops(2);
+                self.chunk.write_op(OpCode::ReadString);
+                self.chunk.write_string(message);
                 self.chunk.write_op(OpCode::ErrEcho);
                 self.chunk.write_op(OpCode::Stop);
                 self.chunk.write_u8(1);
@@ -64,7 +196,42 @@ impl Compiler {
         }
 
         match &node.kind {
-            NodeKind::Block(_) => unimplemented!("awaiting scopes"),
+            NodeKind::Block(stmts) => {
+                self.variables.push_scope();
+                self.chunk.write_op(OpCode::PushScope);
+                for stmt in stmts {
+                    self.compile_statement(stmt);
+                }
+                self.variables.pop_scope();
+                self.chunk.write_op(OpCode::PopScope);
+            }
+            NodeKind::If(condition, then_block, else_block) => {
+                self.compile_expression(condition);
+
+                self.chunk.write_op(OpCode::JumpIfFalse);
+                let jump1 = self.chunk.source.len() - 1;
+                self.chunk.write_noops(2);
+
+                self.compile_statement(then_block);
+                let mut end1 = self.chunk.source.len() - 1;
+
+                if let Some(else_block) = else_block {
+                    self.chunk.write_op(OpCode::Jump);
+                    let jump2 = self.chunk.source.len() - 1;
+                    self.chunk.write_noops(2);
+                    end1 = self.chunk.source.len() - 1;
+
+                    self.compile_statement(else_block);
+
+                    let end2 = self.chunk.source.len() - 1;
+                    let jump_offset = (end2 - jump2 - 2) as u16;
+                    self.chunk.source[jump2 + 1] = (jump_offset >> 8) as u8;
+                    self.chunk.source[jump2 + 2] = (jump_offset) as u8;
+                }
+                let jump_offset = (end1 - jump1 - 2) as u16;
+                self.chunk.source[jump1 + 1] = (jump_offset >> 8) as u8;
+                self.chunk.source[jump1 + 2] = (jump_offset) as u8;
+            }
             NodeKind::UnaryOperation(Operator::UnaryPlus, val) => self.compile_expression(val),
             NodeKind::UnaryOperation(op, val) => {
                 self.compile_expression(val);
@@ -73,6 +240,39 @@ impl Compiler {
                     Operator::Not => OpCode::Not,
                     _ => unimplemented_op!(op),
                 })
+            }
+            NodeKind::BinaryOperation(Operator::Assign, lhs, rhs) => {
+                self.compile_expression(rhs);
+                match &lhs.kind {
+                    NodeKind::Identifier(name) => {
+                        match self.variables.get(name.clone()) {
+                            Ok(Variable {
+                                kind: VariableKind::Local,
+                                index,
+                                ..
+                            }) => {
+                                self.chunk
+                                    .write_op_with_u16(OpCode::SetLocal, *index as u16);
+                            }
+                            Ok(Variable {
+                                kind: VariableKind::Global,
+                                ..
+                            }) => {
+                                self.chunk.write_op(OpCode::SetGlobal);
+                                self.chunk.write_string(name);
+                            }
+                            Err(err) => {
+                                self.reporter.report(err.finish().into());
+                            }
+                        };
+                    }
+                    _ => self.reporter.report(
+                        CompileReport::InvalidAssignmentTarget
+                            .make()
+                            .finish()
+                            .into(),
+                    ),
+                }
             }
             NodeKind::BinaryOperation(op, lhs, rhs) => {
                 // Todo: handle compound expressions, i.e. 1<x<=3
@@ -101,7 +301,28 @@ impl Compiler {
                     _ => unimplemented_op!(op),
                 });
             }
-            NodeKind::Identifier(_) => unimplemented!("awaiting var declaration"),
+            NodeKind::Identifier(key) => {
+                match self.variables.get(key.to_string()) {
+                    Ok(Variable {
+                        kind: VariableKind::Local,
+                        index,
+                        ..
+                    }) => {
+                        self.chunk
+                            .write_op_with_u16(OpCode::LoadLocal, *index as u16);
+                    }
+                    Ok(Variable {
+                        kind: VariableKind::Global,
+                        ..
+                    }) => {
+                        self.chunk.write_op(OpCode::LoadGlobal);
+                        self.chunk.write_string(key);
+                    }
+                    Err(err) => {
+                        self.reporter.report(err.finish().into());
+                    }
+                };
+            }
             NodeKind::StringLiteral(val) => self.chunk.write_const_long(Value::String(val.clone())),
             NodeKind::FloatLiteral(val) => self.chunk.write_const_long(Value::Float(*val)),
             NodeKind::IntegerLiteral(val) => self.handle_integer_const(*val as isize),
@@ -109,7 +330,7 @@ impl Compiler {
                 self.chunk
                     .write_op(if *val { OpCode::True } else { OpCode::False })
             }
-            _ => panic!("{:?}", node),
+            _ => unimplemented!("{:?}", node.kind),
         }
     }
 

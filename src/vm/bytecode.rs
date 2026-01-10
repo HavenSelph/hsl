@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::vm::value::Value;
 use int_enum::IntEnum;
 use name_variant::NamedVariant;
@@ -23,17 +24,21 @@ pub enum OpCode {
 
     // 0x10-0x1f Constants
     ReadConst = 0x10,   // Next i8 represents value
-    LoadConst8 = 0x11,  // Next u8 represents an index
-    LoadConst16 = 0x12, // Next u16 represents an index
+    ReadString = 0x11,  // Read string for constant
+    LoadConst8 = 0x12,  // Next u8 represents an index
+    LoadConst16 = 0x13, // Next u16 represents an index
     Nada = 0x1a,
     True = 0x1b,
     False = 0x1c,
 
     // 0x20-0x2f Variables
-    // LoadLocal = 0x20,
-    // SetLocal = 0x21,
-    // LoadGlobal = 0x22,
-    // SetGlobal = 0x23,
+    LoadLocal = 0x20,  // Next u16 represents an index
+    SetLocal = 0x21,   // Next u16 represents an index
+    LoadGlobal = 0x22, // Read string for key
+    SetGlobal = 0x23,  // Read string for key
+
+    PushScope = 0x2a,
+    PopScope = 0x2f,
 
     // 0x30-0x3f Arithmetic
     Add = 0x30,
@@ -100,8 +105,19 @@ impl Chunk {
         self.write_u32(value as u32);
     }
 
+    pub fn write_string(&mut self, value: &str) {
+        self.write_u16(value.len() as u16);
+        self.source.extend_from_slice(value.as_bytes());
+    }
+
     pub fn write_op(&mut self, op: OpCode) {
         self.source.push(op as u8);
+    }
+
+    pub fn write_noops(&mut self, count: usize) {
+        for _ in 0..count {
+            self.write_op(OpCode::Nop);
+        }
     }
 
     pub fn write_op_with_u8(&mut self, op: OpCode, value: u8) {
@@ -167,6 +183,13 @@ impl Chunk {
         (self.read_u32(offset) as u64) << 32 | self.read_u32(offset) as u64
     }
 
+    pub fn read_string(&self, offset: &mut usize) -> String {
+        let len = self.read_u16(offset) as usize;
+        let start = *offset;
+        *offset += len;
+        String::from_utf8_lossy(&self.source[start..start + len]).to_string()
+    }
+
     pub fn read_op(&self, offset: &mut usize) -> OpCode {
         self.read_u8(offset).try_into().unwrap()
     }
@@ -185,6 +208,10 @@ impl Chunk {
                 let val = self.read_u8(offset) as i8;
                 println!(" {:#04x} ({val})", val);
             }
+            OpCode::ReadString => {
+                let val = self.read_string(offset);
+                println!(" {:#04x} {val:?}", val.len());
+            }
             OpCode::LoadConst8 | OpCode::LoadConst16 => {
                 let idx = match op {
                     OpCode::LoadConst8 => self.read_u8(offset) as usize,
@@ -193,6 +220,14 @@ impl Chunk {
                 };
                 let val = &self.constants[idx];
                 println!(" {:#04x} {val:?}", idx);
+            }
+            OpCode::LoadLocal | OpCode::SetLocal => {
+                let idx = self.read_u16(offset) as usize;
+                println!(" {:#04x} {idx}", idx);
+            }
+            OpCode::LoadGlobal | OpCode::SetGlobal => {
+                let key = self.read_string(offset);
+                println!(" {:#04x} {key:?}", key.len());
             }
             OpCode::Jump | OpCode::JumpIfFalse | OpCode::Loop => {
                 let jump_offset = self.read_u16(offset) as usize;

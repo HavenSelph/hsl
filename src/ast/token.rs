@@ -3,6 +3,12 @@ use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum TokenKind {
+    Let,
+    If,
+    Else,
+    RightBrace,
+    LeftBrace,
+    Global,
     Comma,
     Or,
     And,

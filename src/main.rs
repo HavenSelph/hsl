@@ -26,10 +26,11 @@ fn run_file(
     dprintln!("{ast}");
 
     let mut chunk = {
-        let mut compiler = Compiler::new();
+        let mut compiler = Compiler::new(report_channel.get_sender());
         compiler.compile_program(&ast);
         compiler.chunk
     };
+    report_channel.check_reports_and_exit();
 
     let v = vm.run(&mut chunk);
     vm.dump_stack();

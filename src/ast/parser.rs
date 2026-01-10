@@ -1,7 +1,7 @@
 use crate::ast::lexer::{Base, Lexer, LexerIterator};
 use crate::ast::span::Span;
 use crate::ast::token::{Token, TokenKind};
-use crate::ast::{Node, NodeKind};
+use crate::ast::{Node, NodeKind, Operator};
 use crate::report::{Maybe, Report, ReportKind, ReportLevel, ReportSender, SpanToLabel};
 use ParserError::*;
 use ariadne::Color;
@@ -199,7 +199,7 @@ impl<'contents> Parser<'contents> {
                 Ok(stmt) if stmt.expr_stmt => match self.consume_line() {
                     Ok(_) => stmts.push(*stmt),
                     Err(e) => {
-                        sync!(e.with_help("Express statements must have a trailing semicolon unless they are the last statement in the block."))
+                        sync!(e.with_help("Expression statements must have a trailing semicolon unless they are the last statement in the block."))
                     }
                 },
                 Ok(stmt) => match self.consume_line_or(closer) {
@@ -216,6 +216,40 @@ impl<'contents> Parser<'contents> {
     fn parse_statement(&mut self) -> Maybe<Box<Node>> {
         let Token { kind, span, .. } = self.current;
         let stmt = match kind {
+            TokenKind::If => {
+                self.advance();
+                let condition = self.parse_expression(0)?;
+                let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
+                let then_block = self.parse_block(block_start, TokenKind::RightBrace)?;
+                let else_block = if self.current.kind == TokenKind::Else {
+                    self.advance();
+                    let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
+                    Some(self.parse_block(block_start, TokenKind::RightBrace)?)
+                } else {
+                    None
+                };
+                Ok(NodeKind::If(condition, then_block, else_block)
+                    .make(span)
+                    .into())
+            }
+            TokenKind::Global => {
+                self.advance();
+                let name = self.consume_one(TokenKind::Identifier)?.text.to_string();
+                let expr = if self.current.kind == TokenKind::Equals {
+                    self.advance();
+                    Some(self.parse_expression(0)?)
+                } else {
+                    None
+                };
+                Ok(NodeKind::GlobalDeclaration(name, expr).make(span).into())
+            }
+            TokenKind::Let => {
+                self.advance();
+                let name = self.consume_one(TokenKind::Identifier)?.text.to_string();
+                self.consume_one(TokenKind::Equals)?;
+                let expr = self.parse_expression(0)?;
+                Ok(NodeKind::LocalDeclaration(name, expr).make(span).into())
+            }
             TokenKind::Echo => {
                 self.advance();
                 let expr = self.parse_expression(0)?;
@@ -253,6 +287,28 @@ impl<'contents> Parser<'contents> {
     }
 
     fn parse_expression(&mut self, min_bp: u8) -> Maybe<Box<Node>> {
+        let Token { kind, span, .. } = self.current;
+        let expr = match kind {
+            TokenKind::If if min_bp == 0 => {
+                self.advance();
+                let condition = self.parse_expression(0)?;
+                let then_expr = self.parse_expression(0)?;
+                let else_expr = if self.current.kind == TokenKind::Else {
+                    self.advance();
+                    Some(self.parse_expression(0)?)
+                } else {
+                    None
+                };
+                NodeKind::If(condition, then_expr, else_expr)
+                    .make(span)
+                    .into()
+            }
+            _ => self.parse_fixed_expression(0)?,
+        };
+        Ok(expr)
+    }
+
+    fn parse_fixed_expression(&mut self, min_bp: u8) -> Maybe<Box<Node>> {
         let mut lhs = match self.current.kind.as_prefix() {
             Some((op, _, rbp)) => {
                 let span = self.current.span;
@@ -276,6 +332,12 @@ impl<'contents> Parser<'contents> {
             let Some((op, lbp, rbp)) = self.current.kind.as_infix() else {
                 break;
             };
+            if matches![op, Operator::Assign] && min_bp > lbp {
+                return Err(SyntaxError("Invalid assignment target.".to_string())
+                    .make_labeled(lhs.span.label())
+                    .with_help("Add parentheses to disambiguate assignment target")
+                    .into());
+            }
             if lbp < min_bp {
                 break;
             }
@@ -293,6 +355,11 @@ impl<'contents> Parser<'contents> {
             kind, text, span, ..
         } = self.current;
         match kind {
+            TokenKind::LeftBrace => {
+                let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
+                let block = self.parse_block(block_start, TokenKind::RightBrace)?;
+                Ok(block)
+            }
             TokenKind::LeftParen => {
                 self.advance();
                 let mut expr = self.parse_expression(0)?;

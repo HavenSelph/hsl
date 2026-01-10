@@ -3,7 +3,7 @@ use std::io::{Write, stdin, stdout};
 use crate::ast::parser::Parser;
 use crate::dprintln;
 use crate::files::push_source;
-use crate::report::{ReportChannel, ReportLevel, UnwrapReport};
+use crate::report::{ExitStatus, ReportChannel, ReportLevel, UnwrapReport};
 use crate::vm::{Compiler, VM};
 
 const REPL_VERSION: &str = "0.0.1";
@@ -84,10 +84,16 @@ impl<'v, 'c> Repl<'v, 'c> {
         dprintln!("{ast}");
 
         let mut chunk = {
-            let mut compiler = Compiler::new();
+            let mut compiler = Compiler::new(self.report_channel.get_sender());
             compiler.compile_program(&ast);
             compiler.chunk
         };
+        match self.report_channel.check_reports() {
+            ExitStatus::Yes => {
+                return;
+            }
+            _ => (),
+        }
 
         let val = self
             .vm
