@@ -4,7 +4,7 @@
 use crate::ast::parser::Parser;
 use crate::compiler::Compiler;
 use crate::repl::Repl;
-use crate::report::{Maybe, ReportChannel};
+use crate::report::{ReportChannel, UnwrapReport};
 use crate::vm::VM;
 use args::ARGS;
 
@@ -17,12 +17,10 @@ mod repl;
 mod report;
 mod vm;
 
-fn run_file(
-    filename: &'static str,
-    vm: &mut VM,
-    report_channel: &mut ReportChannel,
-) -> Maybe<vm::Value> {
-    let ast = Parser::new(filename, report_channel.get_sender())?.parse();
+fn run_file(filename: &'static str, vm: &mut VM, report_channel: &mut ReportChannel) {
+    let ast = Parser::new(filename, report_channel.get_sender())
+        .unwrap_reported()
+        .parse();
     report_channel.check_reports_and_exit();
     dprintln!("{ast}");
 
@@ -32,25 +30,14 @@ fn run_file(
         compiler.chunk
     };
     report_channel.check_reports_and_exit();
-
-    let v = vm.run(&mut chunk);
-    vm.dump_stack();
-    v
+    vm.run(&mut chunk).unwrap_reported();
 }
 
 fn main() {
     let mut report_channel = ReportChannel::new();
     let mut vm = VM::new();
     if let Some(filename) = ARGS.input() {
-        match run_file(filename, &mut vm, &mut report_channel) {
-            Err(err) => {
-                ReportChannel::display(err.finish());
-                if ARGS.repl() {
-                    println!("Failed to run init file.")
-                }
-            }
-            Ok(val) => dprintln!("{val}"),
-        };
+        run_file(filename, &mut vm, &mut report_channel);
     }
     if ARGS.repl() || ARGS.input().is_none() {
         Repl::new(&mut vm, &mut report_channel).start_loop();

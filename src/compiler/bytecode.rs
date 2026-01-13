@@ -121,9 +121,12 @@ impl Chunk {
         }
     }
 
-    pub fn write_loop(&mut self, offset: u16) {
-        self.write_jump(OpCode::Loop);
-        self.write_u16(offset);
+    pub fn write_loop(&mut self, target: usize) {
+        let loop_offset: u16 = (self.source.len() - target)
+            .try_into()
+            .expect("Jump offset too big");
+        self.write_op(OpCode::Loop);
+        self.write_u16(loop_offset);
     }
 
     pub fn write_jump(&mut self, op: OpCode) -> usize {
@@ -136,7 +139,6 @@ impl Chunk {
         let jump_offset: u16 = (self.source.len() - offset - 2)
             .try_into()
             .expect("Jump offset too big");
-
         self.source[offset] = (jump_offset >> 8) as u8;
         self.source[offset + 1] = jump_offset as u8;
     }
@@ -253,22 +255,11 @@ impl Chunk {
             OpCode::Jump | OpCode::JumpIfFalse | OpCode::Loop => {
                 let jump_offset = self.read_u16(offset) as usize;
                 let target = if matches!(op, OpCode::Loop) {
-                    *offset - jump_offset
+                    *offset - jump_offset - 3
                 } else {
                     *offset + jump_offset
                 };
-
-                println!(
-                    " {:4} ({}{:03})",
-                    offset,
-                    match op {
-                        OpCode::Jump => "->",
-                        OpCode::JumpIfFalse => "?->",
-                        OpCode::Loop => "<-",
-                        _ => unreachable!(),
-                    },
-                    target
-                );
+                println!(" {jump_offset} ({:#03})", target);
             }
             _ => println!(),
         }

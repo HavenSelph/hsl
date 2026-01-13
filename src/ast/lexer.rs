@@ -164,6 +164,9 @@ impl<'contents> Lexer<'contents> {
                         "if" => TokenKind::If,
                         "else" => TokenKind::Else,
                         "let" => TokenKind::Let,
+                        "loop" => TokenKind::Loop,
+                        "continue" => TokenKind::Continue,
+                        "break" => TokenKind::Break,
                         _ => TokenKind::Identifier,
                     };
                     self.make_simple(start, kind)
@@ -262,6 +265,8 @@ impl<'contents> Lexer<'contents> {
                 '&' => self.make_advance(start, 1, TokenKind::Ampersand),
                 '^' => self.make_advance(start, 1, TokenKind::Caret),
                 '|' => self.make_advance(start, 1, TokenKind::Pipe),
+                ':' => self.make_advance(start, 1, TokenKind::Colon),
+                '?' => self.make_advance(start, 1, TokenKind::QuestionMark),
                 ',' => self.make_advance(start, 1, TokenKind::Comma),
                 '*' => match self.peek_char() {
                     Some('*') => self.make_advance(start, 2, TokenKind::StarStar),

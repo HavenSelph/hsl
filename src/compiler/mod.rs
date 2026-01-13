@@ -6,7 +6,6 @@ use name_variant::NamedVariant;
 use std::fmt::Display;
 
 pub mod bytecode;
-mod variable;
 
 #[derive(NamedVariant)]
 enum CompileReport {
@@ -112,6 +111,11 @@ impl VariableStorage {
 pub struct Compiler {
     reporter: ReportSender,
     variables: VariableStorage,
+
+    loop_depth: usize,
+    loop_starts: Vec<usize>,
+    loop_breaks: Vec<Vec<usize>>, // depth, index
+
     pub chunk: Chunk,
 }
 
@@ -120,6 +124,11 @@ impl Compiler {
         Self {
             reporter,
             variables: VariableStorage::new(),
+
+            loop_depth: 0,
+            loop_starts: Vec::new(),
+            loop_breaks: Vec::new(),
+
             chunk: Chunk::new(),
         }
     }
@@ -138,6 +147,15 @@ impl Compiler {
 
     pub fn compile_statement(&mut self, node: &Node) {
         match &node.kind {
+            NodeKind::Block(stmts) => {
+                self.variables.push_scope();
+                self.chunk.write_op(OpCode::PushScope);
+                for stmt in stmts {
+                    self.compile_statement(stmt);
+                }
+                self.variables.pop_scope();
+                self.chunk.write_op(OpCode::PopScope);
+            }
             NodeKind::Echo(expr) => {
                 self.compile_expression(expr);
                 self.chunk.write_op(OpCode::Echo);
@@ -166,6 +184,15 @@ impl Compiler {
                 );
                 self.chunk.write_op(OpCode::Pop);
             }
+            NodeKind::Continue => {
+                self.chunk.write_loop(self.loop_starts[self.loop_depth - 1]);
+            }
+            NodeKind::Break(value) => {
+                if let Some(value) = value {
+                    self.compile_expression(value);
+                }
+                self.loop_breaks[self.loop_depth - 1].push(self.chunk.write_jump(OpCode::Jump));
+            }
             NodeKind::Assert(expr, message) => {
                 self.compile_expression(expr);
                 self.chunk.write_op(OpCode::Not);
@@ -177,9 +204,21 @@ impl Compiler {
                 self.chunk.write_u8(1);
                 self.chunk.patch_jump(jump);
             }
+            NodeKind::If(condition, then_block, else_block) if !node.expr => {
+                self.compile_expression(condition);
+                let else_jump = self.chunk.write_jump(OpCode::JumpIfFalse);
+                self.compile_statement(then_block);
+                self.chunk.patch_jump(else_jump);
+                if let Some(else_block) = else_block {
+                    let then_jump = self.chunk.write_jump(OpCode::Jump);
+                    self.chunk.patch_jump(else_jump);
+                    self.compile_statement(else_block);
+                    self.chunk.patch_jump(then_jump);
+                }
+            }
             _ => {
                 self.compile_expression(node);
-                if node.expr_stmt {
+                if node.expr {
                     self.chunk.write_op(OpCode::Pop);
                 }
             }
@@ -194,26 +233,43 @@ impl Compiler {
         }
 
         match &node.kind {
-            NodeKind::Block(stmts) => {
-                self.variables.push_scope();
-                self.chunk.write_op(OpCode::PushScope);
-                for stmt in stmts {
-                    self.compile_statement(stmt);
-                }
-                self.variables.pop_scope();
-                self.chunk.write_op(OpCode::PopScope);
-            }
             NodeKind::If(condition, then_block, else_block) => {
                 self.compile_expression(condition);
                 let else_jump = self.chunk.write_jump(OpCode::JumpIfFalse);
-                self.compile_statement(then_block);
+                self.compile_expression(then_block);
                 self.chunk.patch_jump(else_jump);
                 if let Some(else_block) = else_block {
                     let then_jump = self.chunk.write_jump(OpCode::Jump);
                     self.chunk.patch_jump(else_jump);
-                    self.compile_statement(else_block);
+                    self.compile_expression(else_block);
                     self.chunk.patch_jump(then_jump);
                 }
+            }
+            NodeKind::Loop(condition, body) => {
+                let start = self.chunk.source.len();
+
+                self.loop_depth += 1;
+                self.loop_starts.push(start);
+                self.loop_breaks.push(Vec::new());
+
+                let condition_jump = if let Some(condition) = condition {
+                    self.compile_expression(condition);
+                    Some(self.chunk.write_jump(OpCode::JumpIfFalse))
+                } else {
+                    None
+                };
+
+                self.compile_statement(body);
+                self.chunk.write_loop(start);
+                if let Some(condition_jump) = condition_jump {
+                    self.chunk.patch_jump(condition_jump);
+                }
+
+                assert_eq!(self.loop_starts.pop().unwrap(), start);
+                for index in self.loop_breaks.pop().unwrap() {
+                    self.chunk.patch_jump(index);
+                }
+                self.loop_depth -= 1;
             }
             NodeKind::UnaryOperation(Operator::UnaryPlus, val) => self.compile_expression(val),
             NodeKind::UnaryOperation(op, val) => {

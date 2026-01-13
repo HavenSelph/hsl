@@ -123,7 +123,9 @@ impl Value {
 
     pub fn pow(&self, other: &Self) -> Maybe<Self> {
         Ok(match (&self, &other) {
-            (Value::Integer(a), Value::Integer(b)) => Value::Float((*a as f64).powi(*b as i32)),
+            (Value::Integer(a), Value::Integer(b)) => {
+                Value::Integer((*a as f64).powi(*b as i32) as isize)
+            }
             (Value::Integer(a), Value::Float(b)) => Value::Float((*a as f64).powf(*b)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a.powf(*b)),
             (Value::Float(a), Value::Integer(b)) => Value::Float(a.powi(*b as i32)),
@@ -143,7 +145,7 @@ impl Value {
 
     pub fn modulo(&self, other: &Self) -> Maybe<Self> {
         Ok(match (self, other) {
-            (Value::Integer(a), Value::Integer(b)) => Value::Float(*a as f64 % *b as f64),
+            (Value::Integer(a), Value::Integer(b)) => Value::Integer(*a % *b),
             (Value::Integer(a), Value::Float(b)) => Value::Float(*a as f64 % b),
             (Value::Float(a), Value::Float(b)) => Value::Float(a % b),
             (Value::Float(a), Value::Integer(b)) => Value::Float(a % *b as f64),

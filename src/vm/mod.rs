@@ -104,6 +104,7 @@ impl VM {
                 _ => self.run_op(chunk, op)?,
             };
         }
+        assert_eq!(self.ip, chunk.source.len());
         Ok(self.stack.pop().unwrap_or(Value::Nada))
     }
 
@@ -156,7 +157,7 @@ impl VM {
             }
             OpCode::Loop => {
                 let offset = chunk.read_u16(&mut self.ip);
-                self.ip -= offset as usize;
+                self.ip -= (offset + 3) as usize;
             }
             OpCode::ReadConst => {
                 let val = chunk.read_u8(&mut self.ip) as isize;

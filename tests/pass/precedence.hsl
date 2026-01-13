@@ -3,3 +3,4 @@ assert (2 + 3) * 4 == 20
 assert 2 + 3 * 4 == 14
 assert 10 - 3 + 4 == 11
 assert 10 % 3 + 4 == 5
+assert 10 * 2 + 3 == 23

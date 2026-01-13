@@ -1,2 +1,6 @@
 /// exit: 0
-assert (if (10 % 2 == 0) 1 else 2) == 2
+let x = True
+if (x) {
+} else {
+    assert False, "If expression failed?"
+}

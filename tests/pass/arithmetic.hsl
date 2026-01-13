@@ -1,9 +1,8 @@
 /// exit: 0
-echo 10 - 3
-echo 5 * 4
-echo 10 / 4
-echo -5
-echo 5 + 1.5
-assert 3 % 2 == 1, "modulo operator"
-assert 2.4 % 1.2 == 0, "modulo operator"
-assert 10 ** 2 == 100, "power operator"
+assert 10 - 3 == 7
+assert 5 * 4 == 20
+assert 10 / 5 == 2.0
+assert 5 + 1.5 == 6.5
+assert 3 % 2 == 1
+assert 2.4 % 1.2 == 0.0
+assert 10 ** 2 == 100
