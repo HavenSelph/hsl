@@ -314,10 +314,53 @@ impl Compiler {
                 }
             }
             NodeKind::BinaryOperation(op, lhs, rhs) => {
-                // Todo: handle compound expressions, i.e. 1<x<=3
                 self.compile_expression(lhs);
                 self.compile_expression(rhs);
                 self.handle_binary_op(op);
+            }
+            NodeKind::CompoundComparison(ops, operands) => {
+                // Compile compound comparisons like: a < b < c < d
+                // Evaluate each operand exactly once by storing them into temporary
+                // local variables in a new scope, then load them as needed for each
+                // comparison.
+                self.variables.push_scope();
+                self.chunk.write_op(OpCode::PushScope);
+
+                let mut temp_indices = Vec::new();
+                for (i, operand) in operands.iter().enumerate() {
+                    self.compile_expression(operand);
+                    let tmp_name = format!("__cmp_tmp_{i}");
+                    match self.variables.declare(tmp_name, VariableKind::Local) {
+                        Err(err) => self.reporter.report(err.finish().into()),
+                        Ok(()) => {}
+                    }
+                    let idx = (self.variables.locals_count() - 1) as u16;
+                    self.chunk.write_op_with_u16(OpCode::SetLocal, idx);
+                    // SetLocal doesn't pop; remove the value from the stack.
+                    self.chunk.write_op(OpCode::Pop);
+                    temp_indices.push(idx);
+                }
+
+                // Perform comparisons using the temporaries. Each comparison loads two
+                // operands and pushes the boolean result. We then AND successive results.
+                // First comparison
+                self.chunk
+                    .write_op_with_u16(OpCode::LoadLocal, temp_indices[0]);
+                self.chunk
+                    .write_op_with_u16(OpCode::LoadLocal, temp_indices[1]);
+                self.handle_binary_op(&ops[0]);
+
+                for i in 1..ops.len() {
+                    self.chunk
+                        .write_op_with_u16(OpCode::LoadLocal, temp_indices[i]);
+                    self.chunk
+                        .write_op_with_u16(OpCode::LoadLocal, temp_indices[i + 1]);
+                    self.handle_binary_op(&ops[i]);
+                    self.chunk.write_op(OpCode::And);
+                }
+
+                self.variables.pop_scope();
+                self.chunk.write_op(OpCode::PopScope);
             }
             NodeKind::Identifier(key) => {
                 match self.variables.get(key.to_string()) {
