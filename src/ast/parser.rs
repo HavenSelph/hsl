@@ -373,7 +373,37 @@ impl<'contents> Parser<'contents> {
             self.advance();
             let rhs = self.parse_expression(rbp)?;
             let span = lhs.span.extend(rhs.span);
-            lhs = NodeKind::BinaryOperation(op, lhs, rhs).make(span).into();
+
+            // Handle compound comparisons: a < b < c becomes CompoundComparison([<, <], [a, b, c])
+            if op.is_comparison() {
+                match &mut lhs.kind {
+                    // Extend existing compound comparison
+                    NodeKind::CompoundComparison(ops, operands) => {
+                        ops.push(op);
+                        operands.push(rhs);
+                        lhs.span = span;
+                    }
+                    // Check if lhs is a binary comparison that should become compound
+                    NodeKind::BinaryOperation(prev_op, _, _) if prev_op.is_comparison() => {
+                        // Extract lhs components and convert to compound comparison
+                        let prev_lhs = std::mem::replace(&mut lhs, Box::new(NodeKind::Continue.make(span)));
+                        if let NodeKind::BinaryOperation(prev_op, first, second) = prev_lhs.kind {
+                            lhs = NodeKind::CompoundComparison(
+                                vec![prev_op, op],
+                                vec![first, second, rhs],
+                            )
+                            .make(span)
+                            .into();
+                        }
+                    }
+                    // Normal case: just a binary operation
+                    _ => {
+                        lhs = NodeKind::BinaryOperation(op, lhs, rhs).make(span).into();
+                    }
+                }
+            } else {
+                lhs = NodeKind::BinaryOperation(op, lhs, rhs).make(span).into();
+            }
         }
         lhs.expr = true;
         Ok(lhs)

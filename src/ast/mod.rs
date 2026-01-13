@@ -41,6 +41,20 @@ impl Debug for Operator {
     }
 }
 
+impl Operator {
+    pub fn is_comparison(&self) -> bool {
+        matches!(
+            self,
+            Operator::Equal
+                | Operator::NotEqual
+                | Operator::Greater
+                | Operator::GreaterEqual
+                | Operator::Less
+                | Operator::LessEqual
+        )
+    }
+}
+
 impl TokenKind {
     pub fn as_prefix(self) -> Option<(Operator, (), u8)> {
         Some(match self {
@@ -109,6 +123,7 @@ pub enum NodeKind {
     Assert(Box<Node>, String),
     UnaryOperation(Operator, Box<Node>),
     BinaryOperation(Operator, Box<Node>, Box<Node>),
+    CompoundComparison(Vec<Operator>, Vec<Box<Node>>),
     LocalDeclaration(String, Box<Node>),
     GlobalDeclaration(String, Option<Box<Node>>),
     Identifier(String),
@@ -295,6 +310,14 @@ impl<'a> Display for NodeFormatter<'a> {
                     self.child(lhs),
                     self.child(rhs)
                 )?;
+            }
+            NodeKind::CompoundComparison(ops, operands) => {
+                let ops_str: Vec<_> = ops.iter().map(|op| op.variant_name()).collect();
+                write!(f, "({}) {{", ops_str.join(", "))?;
+                for operand in operands {
+                    write!(f, "\n{}", self.child(operand))?;
+                }
+                write!(f, "\n}}")?;
             }
             NodeKind::StringLiteral(val) => write!(f, "({val:?})")?,
             NodeKind::FloatLiteral(val) => write!(f, "({val})")?,
