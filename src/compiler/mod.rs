@@ -317,28 +317,7 @@ impl Compiler {
                 // Todo: handle compound expressions, i.e. 1<x<=3
                 self.compile_expression(lhs);
                 self.compile_expression(rhs);
-                self.chunk.write_op(match op {
-                    Operator::Or => OpCode::Or,
-                    Operator::And => OpCode::And,
-                    Operator::Equal => OpCode::Equal,
-                    Operator::NotEqual => OpCode::NotEqual,
-                    Operator::Greater => OpCode::Greater,
-                    Operator::GreaterEqual => OpCode::GreaterEqual,
-                    Operator::Less => OpCode::Less,
-                    Operator::LessEqual => OpCode::LessEqual,
-                    Operator::BitwiseOr => OpCode::BitOr,
-                    Operator::BitwiseXor => OpCode::BitXor,
-                    Operator::BitwiseAnd => OpCode::BitAnd,
-                    Operator::ShiftLeft => OpCode::ShiftLeft,
-                    Operator::ShiftRight => OpCode::ShiftRight,
-                    Operator::Add => OpCode::Add,
-                    Operator::Subtract => OpCode::Sub,
-                    Operator::Multiply => OpCode::Mul,
-                    Operator::Divide => OpCode::Div,
-                    Operator::Modulo => OpCode::Mod,
-                    Operator::Power => OpCode::Pow,
-                    _ => unimplemented_op!(op),
-                });
+                self.handle_binary_op(op);
             }
             NodeKind::Identifier(key) => {
                 match self.variables.get(key.to_string()) {
@@ -371,6 +350,31 @@ impl Compiler {
             }
             _ => unimplemented!("{:?}", node.kind),
         }
+    }
+
+    pub fn handle_binary_op(&mut self, op: &Operator) {
+        self.chunk.write_op(match op {
+            Operator::Or => OpCode::Or,
+            Operator::And => OpCode::And,
+            Operator::Equal => OpCode::Equal,
+            Operator::NotEqual => OpCode::NotEqual,
+            Operator::Greater => OpCode::Greater,
+            Operator::GreaterEqual => OpCode::GreaterEqual,
+            Operator::Less => OpCode::Less,
+            Operator::LessEqual => OpCode::LessEqual,
+            Operator::BitwiseOr => OpCode::BitOr,
+            Operator::BitwiseXor => OpCode::BitXor,
+            Operator::BitwiseAnd => OpCode::BitAnd,
+            Operator::ShiftLeft => OpCode::ShiftLeft,
+            Operator::ShiftRight => OpCode::ShiftRight,
+            Operator::Add => OpCode::Add,
+            Operator::Subtract => OpCode::Sub,
+            Operator::Multiply => OpCode::Mul,
+            Operator::Divide => OpCode::Div,
+            Operator::Modulo => OpCode::Mod,
+            Operator::Power => OpCode::Pow,
+            _ => unimplemented!("Operator {:?}", op),
+        })
     }
 
     pub fn handle_integer_const(&mut self, val: isize) {
