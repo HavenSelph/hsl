@@ -217,8 +217,82 @@ impl Args {
     }
 }
 
+/// Arguments for the test subcommand
+#[derive(Debug, Clone)]
+pub struct TestArgs {
+    pub compiler: String,
+    pub paths: Vec<String>,
+    pub threads: usize,
+}
+
+impl TestArgs {
+    pub fn parse(args: Vec<String>) -> Self {
+        let mut compiler = "debug".to_string();
+        let mut paths: Vec<String> = Vec::new();
+        let mut threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+
+        let mut args = args.into_iter().peekable();
+        while let Some(arg) = args.next() {
+            if arg.starts_with("-") {
+                match arg.as_str() {
+                    "-h" | "--help" => {
+                        println!("{}", TEST_HELP_MESSAGE);
+                        exit(0);
+                    }
+                    "-i" | "--compiler" => {
+                        if let Some(value) = args.next() {
+                            compiler = value;
+                        } else {
+                            error!("{} expected COMPILER", arg);
+                        }
+                    }
+                    "-c" | "--cpus" => {
+                        if let Some(value) = args.next() {
+                            match value.parse::<usize>() {
+                                Ok(n) => threads = n,
+                                Err(_) => {
+                                    error!("'{}' is not a valid number", value);
+                                }
+                            }
+                        } else {
+                            error!("{} expected NUMBER", arg);
+                        }
+                    }
+                    _ => {
+                        error!("unrecognized argument {}, --help for usage", arg);
+                    }
+                }
+            } else {
+                paths.push(arg);
+            }
+        }
+
+        if paths.is_empty() {
+            paths.push("tests".to_string());
+        }
+
+        Self {
+            compiler,
+            paths,
+            threads,
+        }
+    }
+}
+
+/// Check if the first argument is "test" subcommand
+pub fn is_test_subcommand() -> Option<TestArgs> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(|s| s.as_str()) == Some("test") {
+        Some(TestArgs::parse(args.into_iter().skip(1).collect()))
+    } else {
+        None
+    }
+}
+
 const LICENSE: &str = include_str!("../LICENSE");
-const USAGE: &str = "<INPUT FILE>";
+const USAGE: &str = "[test] <INPUT FILE>";
 const HELP_MESSAGE: &str = "\x1b[1mOPTIONS\x1b[0m
     -h, --help                        Show this message (or only usage with -h)
     -V, --version
@@ -234,4 +308,19 @@ const HELP_MESSAGE: &str = "\x1b[1mOPTIONS\x1b[0m
         --trace-execution             Print out the current op codes
         --max-reports                 Set a maximum amount of reports to be printed
         (default: 25)
+
+\x1b[1mSUBCOMMANDS\x1b[0m
+    test                              Run the test suite (use 'hsl test --help' for more)
+";
+
+const TEST_HELP_MESSAGE: &str = "\x1b[1mUSAGE\x1b[0m
+hsl test [OPTIONS] [FILES/FOLDERS...]
+
+\x1b[1mOPTIONS\x1b[0m
+    -h, --help                        Show this message
+    -i, --compiler COMPILER           Which compiler profile to use (default: debug)
+    -c, --cpus NUMBER                 Number of parallel threads (default: CPU count)
+
+\x1b[1mARGUMENTS\x1b[0m
+    [FILES/FOLDERS...]                Files or folders to test (default: tests)
 ";
