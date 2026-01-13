@@ -6,7 +6,7 @@ use crate::compiler::Compiler;
 use crate::repl::Repl;
 use crate::report::{ReportChannel, UnwrapReport};
 use crate::vm::VM;
-use args::ARGS;
+use args::{is_test_subcommand, ARGS};
 
 mod args;
 mod ast;
@@ -15,6 +15,7 @@ mod debug;
 mod files;
 mod repl;
 mod report;
+mod tester;
 mod vm;
 
 fn run_file(filename: &'static str, vm: &mut VM, report_channel: &mut ReportChannel) {
@@ -34,6 +35,16 @@ fn run_file(filename: &'static str, vm: &mut VM, report_channel: &mut ReportChan
 }
 
 fn main() {
+    // Check if running test subcommand
+    if let Some(test_args) = is_test_subcommand() {
+        let config = tester::TesterConfig {
+            compiler: test_args.compiler,
+            paths: test_args.paths.into_iter().map(std::path::PathBuf::from).collect(),
+            num_threads: test_args.threads,
+        };
+        std::process::exit(tester::run_tests(config));
+    }
+
     let mut report_channel = ReportChannel::new();
     let mut vm = VM::new();
     if let Some(filename) = ARGS.input() {
@@ -46,10 +57,13 @@ fn main() {
 
 #[test]
 fn run_tests() {
-    let output = std::process::Command::new("python3")
-        .args(&["./tester.py", "--compiler", "release", "./tests"])
-        .output()
-        .expect("Failed to run testing suite.");
-    println!("{}", std::str::from_utf8(&output.stdout).unwrap());
-    assert!(output.status.success());
+    let config = tester::TesterConfig {
+        compiler: "release".to_string(),
+        paths: vec![std::path::PathBuf::from("./tests")],
+        num_threads: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+    };
+    let exit_code = tester::run_tests(config);
+    assert_eq!(exit_code, 0, "Test suite failed");
 }
