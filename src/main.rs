@@ -6,7 +6,6 @@ mod ast;
 mod compiler;
 mod debug;
 mod files;
-mod repl;
 mod report;
 mod tester;
 mod vm;
@@ -14,7 +13,6 @@ mod vm;
 use crate::args::{ARGS, Commands};
 use crate::ast::parser::Parser;
 use crate::compiler::Compiler;
-use crate::repl::Repl;
 use crate::report::{ReportChannel, UnwrapReport};
 use crate::vm::VM;
 
@@ -63,9 +61,6 @@ fn main() {
             &mut vm,
             &mut report_channel,
         );
-    }
-    if ARGS.repl || ARGS.input.is_none() {
-        Repl::new(&mut vm, &mut report_channel).start_loop();
     }
 }
 

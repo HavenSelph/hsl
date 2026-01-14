@@ -1,5 +1,4 @@
 pub use crate::compiler::bytecode::{Chunk, OpCode};
-use crate::dprintln;
 use crate::report::{Maybe, ReportKind, ReportLevel};
 pub use crate::vm::value::Value;
 
@@ -68,10 +67,6 @@ impl VM {
             globals: Vec::new(),
             scope: Scope::new(),
         }
-    }
-
-    pub fn dump_stack(&self) {
-        dprintln!("{:#?}", self.stack);
     }
 
     pub fn set_global(&mut self, key: &str, value: Value) {

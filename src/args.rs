@@ -13,10 +13,6 @@ pub struct ArgumentCLI {
     #[arg(value_name = "FILE")]
     pub input: Option<String>,
 
-    /// Run the repl, you may also pass a file
-    #[arg(short, long)]
-    pub repl: bool,
-
     /// Set minimum level for a report to be shown
     #[arg(short = 'l', long, value_enum, default_value_t = ReportLevel::Warn)]
     pub report_level: ReportLevel,

@@ -97,7 +97,3 @@ pub fn get_source(filename: &'static str) -> crate::report::Maybe<&'static Sourc
         }
     }
 }
-
-pub fn push_source(filename: &'static str, source: String) {
-    CACHE.insert(filename, Box::leak(Source::from(source).into()));
-}
