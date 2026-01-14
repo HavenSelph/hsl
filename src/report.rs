@@ -151,7 +151,9 @@ where
     }
 }
 
-#[derive(NamedVariant, Debug, Copy, Clone, PartialOrd, PartialEq)]
+use clap::ValueEnum;
+
+#[derive(ValueEnum, NamedVariant, Debug, Copy, Clone, PartialOrd, PartialEq)]
 pub enum ReportLevel {
     Silent,
     Error,
@@ -253,8 +255,8 @@ pub struct ReportConfig {
 impl Default for ReportConfig {
     fn default() -> Self {
         Self {
-            compact: ARGS.compact(),
-            context: ARGS.context(),
+            compact: ARGS.compact,
+            context: ARGS.context,
         }
     }
 }
@@ -401,7 +403,7 @@ impl ReportChannel {
     }
 
     pub fn should_display(report: &Report) -> bool {
-        ARGS.report_level() >= report.level
+        ARGS.report_level >= report.level
     }
 
     pub fn display(report: Report) {
@@ -418,14 +420,14 @@ impl ReportChannel {
             if report.level == ReportLevel::Error {
                 errors += 1;
             }
-            if !Self::should_display(&*report) || self.reported == ARGS.max_reports() {
+            if !Self::should_display(&*report) || self.reported == ARGS.max_reports {
                 continue;
             }
             report.write(&mut buffer, config);
             self.reported += 1;
         }
         if errors > 0 {
-            if ARGS.report_level() != ReportLevel::Silent {
+            if ARGS.report_level != ReportLevel::Silent {
                 eprintln!(
                     "{}{}",
                     std::str::from_utf8(&buffer).unwrap(),

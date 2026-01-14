@@ -140,7 +140,7 @@ impl Compiler {
         for stmt in stmts {
             self.compile_statement(stmt);
         }
-        if crate::ARGS.debug() {
+        if crate::ARGS.debug {
             self.chunk.disassemble();
         }
     }

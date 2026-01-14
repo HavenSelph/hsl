@@ -69,7 +69,11 @@ pub fn get_expected(filename: &Path) -> Option<Expected> {
         }
 
         if !line.contains(':') {
-            eprintln!("[-] Invalid parameters in {}: \"{}\"", filename.display(), line);
+            eprintln!(
+                "[-] Invalid parameters in {}: \"{}\"",
+                filename.display(),
+                line
+            );
             break;
         }
 
@@ -174,7 +178,7 @@ fn parse_escape_sequences(s: &str) -> String {
 /// Run a single test and return the result
 pub fn handle_test(compiler: &Path, path: &Path, expected: &Expected) -> TestResult {
     let output = Command::new(compiler)
-        .args(["--disable-context", "-c"])
+        .args(["--compact"])
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -331,7 +335,7 @@ impl Default for TesterConfig {
         Self {
             compiler: "debug".to_string(),
             paths: vec![PathBuf::from("tests")],
-            num_threads: std::thread::available_parallelism()
+            num_threads: thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1),
         }
@@ -492,9 +496,5 @@ pub fn run_tests(config: TesterConfig) -> i32 {
     println!("Tests passed: {}", final_passed.green());
     println!("Tests failed: {}", final_failed.red());
 
-    if final_failed > 0 {
-        1
-    } else {
-        0
-    }
+    if final_failed > 0 { 1 } else { 0 }
 }

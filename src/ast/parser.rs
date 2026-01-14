@@ -386,7 +386,8 @@ impl<'contents> Parser<'contents> {
                     // Check if lhs is a binary comparison that should become compound
                     NodeKind::BinaryOperation(prev_op, _, _) if prev_op.is_comparison() => {
                         // Extract lhs components and convert to compound comparison
-                        let prev_lhs = std::mem::replace(&mut lhs, Box::new(NodeKind::Continue.make(span)));
+                        let prev_lhs =
+                            std::mem::replace(&mut lhs, Box::new(NodeKind::Continue.make(span)));
                         if let NodeKind::BinaryOperation(prev_op, first, second) = prev_lhs.kind {
                             lhs = NodeKind::CompoundComparison(
                                 vec![prev_op, op],

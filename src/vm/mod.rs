@@ -91,7 +91,7 @@ impl VM {
     pub fn run(&mut self, chunk: &mut Chunk) -> Maybe<Value> {
         self.ip = 0;
         while self.ip < chunk.source.len() {
-            if crate::ARGS.trace_execution() {
+            if crate::ARGS.trace_execution {
                 chunk.disassemble_op(&mut self.ip.clone())
             }
             let op = chunk.read_op(&mut self.ip);
