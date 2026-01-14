@@ -1,16 +1,16 @@
 use crate::ast::{Node, NodeKind, Operator};
 use crate::compiler::bytecode::{Chunk, OpCode};
-use crate::report::{Maybe, ReportKind, ReportSender};
+use crate::report::{ReportKind, ReportSender};
 use crate::vm::Value;
 use name_variant::NamedVariant;
 use std::fmt::Display;
 
 pub mod bytecode;
+pub mod pass;
 
 #[derive(NamedVariant)]
 enum CompileReport {
     VariableNotFound(String),
-    VariableAlreadyDeclared(String),
     InvalidAssignmentTarget,
 }
 
@@ -26,91 +26,16 @@ impl ReportKind for CompileReport {
 
 impl Display for CompileReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.variant_name())?;
         match self {
-            CompileReport::VariableNotFound(name)
-            | CompileReport::VariableAlreadyDeclared(name) => write!(f, ": {}", name),
+            CompileReport::VariableNotFound(name) => write!(f, "Variable not found: {}", name),
             CompileReport::InvalidAssignmentTarget => write!(f, "Invalid assignment target"),
         }
     }
 }
 
-#[derive(Copy, Clone)]
-enum VariableKind {
-    Local,
-    Global,
-}
-
-struct Variable {
-    kind: VariableKind,
-    name: String,
-    depth: usize,
-    index: usize,
-}
-
-struct VariableStorage {
-    variables: Vec<Variable>,
-    depth: usize,
-}
-
-impl VariableStorage {
-    fn new() -> Self {
-        Self {
-            variables: Vec::new(),
-            depth: 0,
-        }
-    }
-
-    fn locals_count(&self) -> usize {
-        self.variables
-            .iter()
-            .filter(|var| matches![var.kind, VariableKind::Local])
-            .count()
-    }
-
-    fn push_scope(&mut self) {
-        self.depth += 1;
-    }
-
-    // Returns the number of variables removed from the storage.
-    fn pop_scope(&mut self) -> usize {
-        self.depth -= 1;
-        let v = self.variables.len();
-        self.variables.retain(|var| var.depth <= self.depth);
-        v - self.variables.len()
-    }
-
-    fn declare(&mut self, name: String, kind: VariableKind) -> Maybe<()> {
-        for var in self.variables.iter().rev() {
-            if var.depth < self.depth {
-                break;
-            }
-            if var.name == name {
-                return Err(CompileReport::VariableAlreadyDeclared(name).make().into());
-            }
-        }
-        self.variables.push(Variable {
-            kind,
-            name,
-            depth: self.depth,
-            index: self.locals_count(),
-        });
-        Ok(())
-    }
-
-    fn get(&mut self, name: String) -> Maybe<&Variable> {
-        for var in self.variables.iter().rev() {
-            if var.name == name {
-                return Ok(&var);
-            }
-        }
-        Err(CompileReport::VariableNotFound(name).make().into())
-    }
-}
-
 pub struct Compiler {
     reporter: ReportSender,
-    variables: VariableStorage,
+    local_count: Vec<u16>, // Stack of local counts per scope
 
     loop_depth: usize,
     loop_starts: Vec<usize>,
@@ -123,7 +48,7 @@ impl Compiler {
     pub fn new(reporter: ReportSender) -> Self {
         Self {
             reporter,
-            variables: VariableStorage::new(),
+            local_count: vec![0],
 
             loop_depth: 0,
             loop_starts: Vec::new(),
@@ -148,40 +73,40 @@ impl Compiler {
     pub fn compile_statement(&mut self, node: &Node) {
         match &node.kind {
             NodeKind::Block(stmts) => {
-                self.variables.push_scope();
+                self.local_count.push(0);
                 self.chunk.write_op(OpCode::PushScope);
-                for stmt in stmts {
-                    self.compile_statement(stmt);
+                let len = stmts.len();
+                for (i, stmt) in stmts.iter().enumerate() {
+                    let is_last = i == len - 1;
+                    if is_last && !stmt.expr {
+                        self.compile_expression(stmt);
+                    } else {
+                        self.compile_statement(stmt);
+                    }
                 }
-                self.variables.pop_scope();
+                if len == 0 {
+                    self.chunk.write_op(OpCode::Nada);
+                }
+                self.local_count.pop();
                 self.chunk.write_op(OpCode::PopScope);
             }
             NodeKind::Echo(expr) => {
                 self.compile_expression(expr);
                 self.chunk.write_op(OpCode::Echo);
             }
-            NodeKind::GlobalDeclaration(name, expr) => {
-                match self.variables.declare(name.clone(), VariableKind::Global) {
-                    Err(err) => self.reporter.report(err.finish().into()),
-                    Ok(()) => (),
-                }
+            NodeKind::GlobalDeclaration(_name, _ty, expr, _) => {
                 if let Some(val) = expr {
                     self.compile_expression(val);
                     self.chunk.write_op(OpCode::SetGlobal);
-                    self.chunk.write_string(name);
+                    self.chunk.write_string(_name);
                     self.chunk.write_op(OpCode::Pop);
                 }
             }
-            NodeKind::LocalDeclaration(name, expr) => {
+            NodeKind::LocalDeclaration(_name, _ty, expr, resolved_idx) => {
                 self.compile_expression(expr);
-                match self.variables.declare(name.clone(), VariableKind::Local) {
-                    Err(err) => self.reporter.report(err.finish().into()),
-                    Ok(()) => (),
-                }
-                self.chunk.write_op_with_u16(
-                    OpCode::SetLocal,
-                    (self.variables.locals_count() - 1) as u16,
-                );
+                let idx = resolved_idx.expect("LocalDeclaration should have resolved index");
+                *self.local_count.last_mut().unwrap() += 1;
+                self.chunk.write_op_with_u16(OpCode::SetLocal, idx);
                 self.chunk.write_op(OpCode::Pop);
             }
             NodeKind::Continue => {
@@ -233,6 +158,24 @@ impl Compiler {
         }
 
         match &node.kind {
+            NodeKind::Block(stmts) => {
+                self.local_count.push(0);
+                self.chunk.write_op(OpCode::PushScope);
+                let len = stmts.len();
+                for (i, stmt) in stmts.iter().enumerate() {
+                    let is_last = i == len - 1;
+                    if is_last && !stmt.expr {
+                        self.compile_expression(stmt);
+                    } else {
+                        self.compile_statement(stmt);
+                    }
+                }
+                if len == 0 {
+                    self.chunk.write_op(OpCode::Nada);
+                }
+                self.local_count.pop();
+                self.chunk.write_op(OpCode::PopScope);
+            }
             NodeKind::If(condition, then_block, else_block) => {
                 self.compile_expression(condition);
                 let else_jump = self.chunk.write_jump(OpCode::JumpIfFalse);
@@ -283,27 +226,24 @@ impl Compiler {
             NodeKind::BinaryOperation(Operator::Assign, lhs, rhs) => {
                 self.compile_expression(rhs);
                 match &lhs.kind {
-                    NodeKind::Identifier(name) => {
-                        match self.variables.get(name.clone()) {
-                            Ok(Variable {
-                                kind: VariableKind::Local,
-                                index,
-                                ..
-                            }) => {
-                                self.chunk
-                                    .write_op_with_u16(OpCode::SetLocal, *index as u16);
-                            }
-                            Ok(Variable {
-                                kind: VariableKind::Global,
-                                ..
-                            }) => {
-                                self.chunk.write_op(OpCode::SetGlobal);
-                                self.chunk.write_string(name);
-                            }
-                            Err(err) => {
-                                self.reporter.report(err.finish().into());
-                            }
-                        };
+                    NodeKind::Identifier(name, Some(resolved)) => match resolved.kind {
+                        crate::ast::VariableKind::Local => {
+                            self.chunk
+                                .write_op_with_u16(OpCode::SetLocal, resolved.index);
+                        }
+                        crate::ast::VariableKind::Global => {
+                            self.chunk.write_op(OpCode::SetGlobal);
+                            self.chunk.write_string(name);
+                        }
+                    },
+                    NodeKind::Identifier(name, None) => {
+                        // Variable not resolved - error already reported by var_resolve pass
+                        self.reporter.report(
+                            CompileReport::VariableNotFound(name.clone())
+                                .make()
+                                .finish()
+                                .into(),
+                        );
                     }
                     _ => self.reporter.report(
                         CompileReport::InvalidAssignmentTarget
@@ -323,27 +263,28 @@ impl Compiler {
                 // Evaluate each operand exactly once by storing them into temporary
                 // local variables in a new scope, then load them as needed for each
                 // comparison.
-                self.variables.push_scope();
+                self.local_count.push(0);
                 self.chunk.write_op(OpCode::PushScope);
+
+                // Get base index for temporaries (sum of all locals in outer scopes)
+                let base_idx: u16 = self
+                    .local_count
+                    .iter()
+                    .take(self.local_count.len() - 1)
+                    .sum();
 
                 let mut temp_indices = Vec::new();
                 for (i, operand) in operands.iter().enumerate() {
                     self.compile_expression(operand);
-                    let tmp_name = format!("__cmp_tmp_{i}");
-                    match self.variables.declare(tmp_name, VariableKind::Local) {
-                        Err(err) => self.reporter.report(err.finish().into()),
-                        Ok(()) => {}
-                    }
-                    let idx = (self.variables.locals_count() - 1) as u16;
+                    let idx = base_idx + i as u16;
                     self.chunk.write_op_with_u16(OpCode::SetLocal, idx);
-                    // SetLocal doesn't pop; remove the value from the stack.
                     self.chunk.write_op(OpCode::Pop);
                     temp_indices.push(idx);
+                    *self.local_count.last_mut().unwrap() += 1;
                 }
 
                 // Perform comparisons using the temporaries. Each comparison loads two
                 // operands and pushes the boolean result. We then AND successive results.
-                // First comparison
                 self.chunk
                     .write_op_with_u16(OpCode::LoadLocal, temp_indices[0]);
                 self.chunk
@@ -359,30 +300,27 @@ impl Compiler {
                     self.chunk.write_op(OpCode::And);
                 }
 
-                self.variables.pop_scope();
+                self.local_count.pop();
                 self.chunk.write_op(OpCode::PopScope);
             }
-            NodeKind::Identifier(key) => {
-                match self.variables.get(key.to_string()) {
-                    Ok(Variable {
-                        kind: VariableKind::Local,
-                        index,
-                        ..
-                    }) => {
-                        self.chunk
-                            .write_op_with_u16(OpCode::LoadLocal, *index as u16);
-                    }
-                    Ok(Variable {
-                        kind: VariableKind::Global,
-                        ..
-                    }) => {
-                        self.chunk.write_op(OpCode::LoadGlobal);
-                        self.chunk.write_string(key);
-                    }
-                    Err(err) => {
-                        self.reporter.report(err.finish().into());
-                    }
-                };
+            NodeKind::Identifier(name, Some(resolved)) => match resolved.kind {
+                crate::ast::VariableKind::Local => {
+                    self.chunk
+                        .write_op_with_u16(OpCode::LoadLocal, resolved.index);
+                }
+                crate::ast::VariableKind::Global => {
+                    self.chunk.write_op(OpCode::LoadGlobal);
+                    self.chunk.write_string(name);
+                }
+            },
+            NodeKind::Identifier(name, None) => {
+                // Variable not resolved - error already reported by var_resolve pass
+                self.reporter.report(
+                    CompileReport::VariableNotFound(name.clone())
+                        .make()
+                        .finish()
+                        .into(),
+                );
             }
             NodeKind::StringLiteral(val) => self.chunk.write_const_long(Value::String(val.clone())),
             NodeKind::FloatLiteral(val) => self.chunk.write_const_long(Value::Float(*val)),
@@ -391,7 +329,52 @@ impl Compiler {
                 self.chunk
                     .write_op(if *val { OpCode::True } else { OpCode::False })
             }
-            _ => unimplemented!("{:?}", node.kind),
+            NodeKind::Assert(expr, message) => {
+                self.compile_expression(expr);
+                self.chunk.write_op(OpCode::Not);
+                let jump = self.chunk.write_jump(OpCode::JumpIfFalse);
+                self.chunk.write_op(OpCode::ReadString);
+                self.chunk.write_string(message);
+                self.chunk.write_op(OpCode::ErrEcho);
+                self.chunk.write_op(OpCode::Stop);
+                self.chunk.write_u8(1);
+                self.chunk.patch_jump(jump);
+                self.chunk.write_op(OpCode::Nada);
+            }
+            NodeKind::Echo(expr) => {
+                self.compile_expression(expr);
+                self.chunk.write_op(OpCode::Echo);
+                self.chunk.write_op(OpCode::Nada);
+            }
+            NodeKind::Continue => {
+                self.chunk.write_loop(self.loop_starts[self.loop_depth - 1]);
+                self.chunk.write_op(OpCode::Nada);
+            }
+            NodeKind::Break(value) => {
+                if let Some(value) = value {
+                    self.compile_expression(value);
+                } else {
+                    self.chunk.write_op(OpCode::Nada);
+                }
+                self.loop_breaks[self.loop_depth - 1].push(self.chunk.write_jump(OpCode::Jump));
+            }
+            NodeKind::LocalDeclaration(_name, _ty, expr, resolved_idx) => {
+                self.compile_expression(expr);
+                let idx = resolved_idx.expect("LocalDeclaration should have resolved index");
+                *self.local_count.last_mut().unwrap() += 1;
+                self.chunk.write_op_with_u16(OpCode::SetLocal, idx);
+                self.chunk.write_op(OpCode::Nada);
+            }
+            NodeKind::GlobalDeclaration(_name, _ty, expr, _) => {
+                if let Some(val) = expr {
+                    self.compile_expression(val);
+                    self.chunk.write_op(OpCode::SetGlobal);
+                    self.chunk.write_string(_name);
+                    self.chunk.write_op(OpCode::Pop);
+                }
+                self.chunk.write_op(OpCode::Nada);
+            }
+            NodeKind::ConstDeclaration(_, _, _) => (),
         }
     }
 

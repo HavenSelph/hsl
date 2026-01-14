@@ -1,0 +1,19 @@
+/// bc: IntegerLiteral(10)
+/// bc: IntegerLiteral(20)
+/// bc: IntegerLiteral(30)
+/// out:
+/// 10
+/// 20
+/// 30
+
+// Const variables should be inlined at compile time
+const X = 10
+echo X
+
+// Const with type annotation
+const Y: int = 20
+echo Y
+
+// Const expressions should be folded
+const Z = 10 + 20
+echo Z

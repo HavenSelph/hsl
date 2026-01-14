@@ -15,6 +15,7 @@ use std::thread;
 pub enum ExpectedResult {
     ExitWithCode(i32),
     ExitWithOutput(String),
+    ExitWithOutputAndBytecode { output: String, bytecode: Vec<String> },
     Fail(String),
     SkipSilently,
     SkipReport,
@@ -116,6 +117,51 @@ pub fn get_expected(filename: &Path) -> Option<Expected> {
             "fail" => {
                 return Some(Expected::new(ExpectedResult::Fail(value.to_string())));
             }
+            "bc" => {
+                // Bytecode verification - collect expected opcodes
+                let mut bytecode_patterns = vec![value.to_string()];
+                for next_line in lines.by_ref() {
+                    match next_line {
+                        Ok(ln) if ln.starts_with("///") => {
+                            let content = ln[3..].trim();
+                            if content.starts_with("bc:") {
+                                bytecode_patterns.push(content[3..].trim().to_string());
+                            } else if content.starts_with("out:") {
+                                // Found output section, parse it
+                                let mut output_value = content[4..].trim().to_string();
+                                if output_value.is_empty() {
+                                    let mut multiline = String::new();
+                                    for out_line in lines.by_ref() {
+                                        match out_line {
+                                            Ok(ol) if ol.starts_with("///") => {
+                                                if !multiline.is_empty() {
+                                                    multiline.push('\n');
+                                                }
+                                                multiline.push_str(ol[3..].trim());
+                                            }
+                                            _ => break,
+                                        }
+                                    }
+                                    output_value = multiline;
+                                }
+                                let parsed_output = parse_string_literal(&output_value);
+                                return Some(Expected::new(ExpectedResult::ExitWithOutputAndBytecode {
+                                    output: parsed_output,
+                                    bytecode: bytecode_patterns,
+                                }));
+                            } else {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                // No output section found, just check bytecode with exit 0
+                return Some(Expected::new(ExpectedResult::ExitWithOutputAndBytecode {
+                    output: String::new(),
+                    bytecode: bytecode_patterns,
+                }));
+            }
             _ => {
                 eprintln!("[-] Invalid parameter in {}: {}", filename.display(), line);
                 break;
@@ -177,9 +223,19 @@ fn parse_escape_sequences(s: &str) -> String {
 
 /// Run a single test and return the result
 pub fn handle_test(compiler: &Path, path: &Path, expected: &Expected) -> TestResult {
+    let needs_debug = matches!(
+        expected.result_type,
+        ExpectedResult::ExitWithOutputAndBytecode { .. }
+    );
+    
+    let mut args = vec!["--compact".to_string()];
+    if needs_debug {
+        args.push("--debug".to_string());
+    }
+    args.push(path.to_string_lossy().to_string());
+    
     let output = Command::new(compiler)
-        .args(["--compact"])
-        .arg(path)
+        .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
@@ -276,6 +332,73 @@ pub fn handle_test(compiler: &Path, path: &Path, expected: &Expected) -> TestRes
                     message: "(Success)".to_string(),
                     path: path.to_path_buf(),
                 }
+            }
+        }
+        ExpectedResult::ExitWithOutputAndBytecode { output: expected_output, bytecode } => {
+            if exit_code != 0 {
+                return TestResult {
+                    passed: false,
+                    message: format!("Expected exit code 0, but got {}\n{}", exit_code, stderr),
+                    path: path.to_path_buf(),
+                };
+            }
+
+            // Check bytecode patterns in stdout (debug output goes to stdout)
+            let debug_output = &stdout;
+            let mut missing_patterns = Vec::new();
+            for pattern in bytecode {
+                if !debug_output.contains(pattern) {
+                    missing_patterns.push(pattern.clone());
+                }
+            }
+
+            if !missing_patterns.is_empty() {
+                return TestResult {
+                    passed: false,
+                    message: format!(
+                        "Missing expected bytecode patterns:\n  {}\nActual debug output:\n{}",
+                        missing_patterns.join("\n  "),
+                        debug_output
+                    ),
+                    path: path.to_path_buf(),
+                };
+            }
+
+            // Check output - extract the last line(s) after the bytecode dump
+            // The actual program output comes after the "X instructions and Y bytes" line
+            let expected_out = expected_output.trim();
+            if !expected_out.is_empty() {
+                // Find where the actual output starts (after bytecode dump)
+                let output_lines: Vec<&str> = stdout.lines().collect();
+                let mut actual_output = String::new();
+                let mut found_bytecode_end = false;
+                for line in &output_lines {
+                    if found_bytecode_end {
+                        if !actual_output.is_empty() {
+                            actual_output.push('\n');
+                        }
+                        actual_output.push_str(line);
+                    } else if line.contains("instructions and") && line.contains("bytes") {
+                        found_bytecode_end = true;
+                    }
+                }
+                
+                if actual_output.trim() != expected_out {
+                    return TestResult {
+                        passed: false,
+                        message: format!(
+                            "Incorrect output produced\nexpected: {:?}\ngot: {:?}",
+                            expected_out, actual_output.trim()
+                        ),
+                        path: path.to_path_buf(),
+                    };
+                }
+            }
+
+            TestResult {
+                passed: true,
+                message: "(Success)".to_string(),
+                path: path.to_path_buf(),
             }
         }
         ExpectedResult::SkipSilently | ExpectedResult::SkipReport => TestResult {

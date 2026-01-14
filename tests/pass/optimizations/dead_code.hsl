@@ -1,0 +1,10 @@
+/// bc: IntegerLiteral(42)
+/// out:
+/// 42
+
+// Dead code elimination - effectless expressions should be removed
+// Only the echo should remain in the AST
+1 + 1;
+2 * 3;
+True and False;
+echo 42

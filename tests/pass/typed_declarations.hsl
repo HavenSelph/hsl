@@ -1,0 +1,16 @@
+/// out:
+/// 42
+/// 3.14
+/// hello
+/// true
+let x: int = 42
+echo x
+
+let y: float = 3.14
+echo y
+
+let s: string = "hello"
+echo s
+
+let b: bool = True
+echo b

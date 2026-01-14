@@ -13,6 +13,7 @@ pub enum TokenKind {
     Caret,
     Colon,
     Comma,
+    Const,
     Continue,
     EOF,
     Echo,

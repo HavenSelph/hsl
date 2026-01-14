@@ -1,0 +1,16 @@
+/// bc: IntegerLiteral(1)
+/// bc: IntegerLiteral(2)
+/// out:
+/// 1
+/// 2
+
+// Unreachable code after break should be eliminated
+let x = 1
+loop {
+    echo x
+    break
+    echo 999
+}
+
+// Code after the loop should still run
+echo 2

@@ -1,0 +1,23 @@
+/// bc: IntegerLiteral(10)
+/// bc: IntegerLiteral(20)
+/// out:
+/// 10
+/// 20
+
+// Dead branch elimination - condition is always true
+// The else branch with 999 should be eliminated
+let x = if (True) {
+    10
+} else {
+    999
+}
+echo x
+
+// Dead branch elimination - condition is always false
+// The then branch with 999 should be eliminated
+let y = if (False) {
+    999
+} else {
+    20
+}
+echo y

@@ -1,0 +1,29 @@
+/// out:
+/// 10
+/// 20
+/// 30
+
+// Block as expression - last statement without ; becomes the value
+let x = {
+    let a = 5
+    let b = 5
+    a + b
+}
+echo x
+
+// If as expression
+let y = if (True) {
+    20
+} else {
+    0
+}
+echo y
+
+// Nested blocks
+let z = {
+    let inner = {
+        15
+    }
+    inner + 15
+}
+echo z

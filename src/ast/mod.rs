@@ -8,7 +8,61 @@ pub mod parser;
 pub mod span;
 pub mod token;
 
-#[derive(NamedVariant, Copy, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VariableKind {
+    Local,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedVar {
+    pub kind: VariableKind,
+    pub index: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Type {
+    Int,
+    Float,
+    String,
+    Bool,
+    Nada,
+    Unknown,
+    Never,
+}
+
+impl Display for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Int => write!(f, "int"),
+            Type::Float => write!(f, "float"),
+            Type::String => write!(f, "string"),
+            Type::Bool => write!(f, "bool"),
+            Type::Nada => write!(f, "nada"),
+            Type::Unknown => write!(f, "unknown"),
+            Type::Never => write!(f, "never"),
+        }
+    }
+}
+
+impl Type {
+    pub fn from_str(s: &str) -> Option<Type> {
+        match s {
+            "int" => Some(Type::Int),
+            "float" => Some(Type::Float),
+            "string" => Some(Type::String),
+            "bool" => Some(Type::Bool),
+            "nada" => Some(Type::Nada),
+            _ => None,
+        }
+    }
+
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, Type::Int | Type::Float)
+    }
+}
+
+#[derive(NamedVariant, Copy, Clone, PartialEq, Eq)]
 pub enum Operator {
     ShiftLeft,
     ShiftRight,
@@ -38,6 +92,36 @@ pub enum Operator {
 impl Debug for Operator {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.variant_name())
+    }
+}
+
+impl Display for Operator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operator::ShiftLeft => write!(f, "<<"),
+            Operator::ShiftRight => write!(f, ">>"),
+            Operator::BitwiseOr => write!(f, "|"),
+            Operator::BitwiseAnd => write!(f, "&"),
+            Operator::BitwiseXor => write!(f, "^"),
+            Operator::UnaryPlus => write!(f, "+"),
+            Operator::UnaryMinus => write!(f, "-"),
+            Operator::Add => write!(f, "+"),
+            Operator::And => write!(f, "and"),
+            Operator::Assign => write!(f, "="),
+            Operator::Divide => write!(f, "/"),
+            Operator::Equal => write!(f, "=="),
+            Operator::Greater => write!(f, ">"),
+            Operator::GreaterEqual => write!(f, ">="),
+            Operator::Less => write!(f, "<"),
+            Operator::LessEqual => write!(f, "<="),
+            Operator::Modulo => write!(f, "%"),
+            Operator::Multiply => write!(f, "*"),
+            Operator::Not => write!(f, "not"),
+            Operator::NotEqual => write!(f, "!="),
+            Operator::Or => write!(f, "or"),
+            Operator::Power => write!(f, "**"),
+            Operator::Subtract => write!(f, "-"),
+        }
     }
 }
 
@@ -124,9 +208,10 @@ pub enum NodeKind {
     UnaryOperation(Operator, Box<Node>),
     BinaryOperation(Operator, Box<Node>, Box<Node>),
     CompoundComparison(Vec<Operator>, Vec<Box<Node>>),
-    LocalDeclaration(String, Box<Node>),
-    GlobalDeclaration(String, Option<Box<Node>>),
-    Identifier(String),
+    LocalDeclaration(String, Option<Type>, Box<Node>, Option<u16>),
+    GlobalDeclaration(String, Option<Type>, Option<Box<Node>>, Option<u16>),
+    ConstDeclaration(String, Option<Type>, Box<Node>),
+    Identifier(String, Option<ResolvedVar>),
     StringLiteral(String),
     FloatLiteral(f64),
     IntegerLiteral(usize),
@@ -145,6 +230,7 @@ impl NodeKind {
             kind: self,
             span,
             expr: false,
+            ty: None,
         }
     }
 }
@@ -154,6 +240,7 @@ pub struct Node {
     pub kind: NodeKind,
     pub span: Span,
     pub expr: bool,
+    pub ty: Option<Type>,
 }
 
 impl Display for Node {
@@ -283,14 +370,30 @@ impl<'a> Display for NodeFormatter<'a> {
                     write!(f, "else {{\n{}\n}}", self.child(else_block))?;
                 }
             }
-            NodeKind::GlobalDeclaration(name, expr) => {
-                write!(f, "({name:?})")?;
+            NodeKind::GlobalDeclaration(name, ty, expr, _) => {
+                write!(f, "({name:?}")?;
+                if let Some(ty) = ty {
+                    write!(f, ": {ty}")?;
+                }
+                write!(f, ")")?;
                 if let Some(expr) = expr {
                     write!(f, " {{\n{}\n}}", self.child(expr))?;
                 }
             }
-            NodeKind::LocalDeclaration(name, expr) => {
-                write!(f, "({name:?})")?;
+            NodeKind::LocalDeclaration(name, ty, expr, _) => {
+                write!(f, "({name:?}")?;
+                if let Some(ty) = ty {
+                    write!(f, ": {ty}")?;
+                }
+                write!(f, ")")?;
+                write!(f, " {{\n{}\n}}", self.child(expr))?;
+            }
+            NodeKind::ConstDeclaration(name, ty, expr) => {
+                write!(f, "({name:?}")?;
+                if let Some(ty) = ty {
+                    write!(f, ": {ty}")?;
+                }
+                write!(f, ")")?;
                 write!(f, " {{\n{}\n}}", self.child(expr))?;
             }
             NodeKind::UnaryOperation(op, expr) => {
@@ -330,7 +433,13 @@ impl<'a> Display for NodeFormatter<'a> {
                 }
                 write!(f, "}}")?;
             }
-            NodeKind::Identifier(val) => write!(f, "({val:?})")?,
+            NodeKind::Identifier(val, resolved) => {
+                write!(f, "({val:?}")?;
+                if let Some(r) = resolved {
+                    write!(f, " {:?}@{}", r.kind, r.index)?;
+                }
+                write!(f, ")")?;
+            }
         }
         write!(f, "[{:?}]", self.node.span)?;
         Ok(())

@@ -161,6 +161,7 @@ impl<'contents> Lexer<'contents> {
                         "and" => TokenKind::And,
                         "assert" => TokenKind::Assert,
                         "global" => TokenKind::Global,
+                        "const" => TokenKind::Const,
                         "if" => TokenKind::If,
                         "else" => TokenKind::Else,
                         "let" => TokenKind::Let,

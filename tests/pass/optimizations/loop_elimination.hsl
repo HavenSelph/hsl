@@ -1,0 +1,10 @@
+/// bc: IntegerLiteral(42)
+/// out:
+/// 42
+
+// Loop with False condition should be eliminated entirely
+loop (False) {
+    echo 999
+}
+
+echo 42

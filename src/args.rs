@@ -33,6 +33,10 @@ pub struct ArgumentCLI {
     #[arg(long)]
     pub trace_execution: bool,
 
+    /// Disable optimization passes
+    #[arg(long)]
+    pub no_optimize: bool,
+
     /// Set a maximum amount of reports to be printed
     #[arg(long, default_value_t = 25)]
     pub max_reports: usize,

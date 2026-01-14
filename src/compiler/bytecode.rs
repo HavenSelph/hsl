@@ -70,9 +70,12 @@ pub enum OpCode {
     And = 0x5c,
 }
 
+use std::collections::HashMap;
+
 pub struct Chunk {
     pub source: Vec<u8>,
     constants: Vec<Value>,
+    string_intern: HashMap<String, usize>,
 }
 
 impl Chunk {
@@ -80,6 +83,7 @@ impl Chunk {
         Self {
             source: Vec::new(),
             constants: Vec::new(),
+            string_intern: HashMap::new(),
         }
     }
 
@@ -168,11 +172,22 @@ impl Chunk {
     }
 
     pub fn write_const_long(&mut self, value: Value) {
-        let idx = match self.constants.iter().position(|v| *v == value) {
-            Some(idx) => idx,
-            None => {
+        let idx = if let Value::String(ref s) = value {
+            if let Some(&idx) = self.string_intern.get(s) {
+                idx
+            } else {
+                let idx = self.constants.len();
+                self.string_intern.insert(s.clone(), idx);
                 self.constants.push(value);
-                self.constants.len() - 1
+                idx
+            }
+        } else {
+            match self.constants.iter().position(|v| *v == value) {
+                Some(idx) => idx,
+                None => {
+                    self.constants.push(value);
+                    self.constants.len() - 1
+                }
             }
         };
         match idx {

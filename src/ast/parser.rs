@@ -1,7 +1,7 @@
 use crate::ast::lexer::{Base, Lexer, LexerIterator};
 use crate::ast::span::Span;
 use crate::ast::token::{Token, TokenKind};
-use crate::ast::{Node, NodeKind, Operator};
+use crate::ast::{Node, NodeKind, Operator, Type};
 use crate::report::{Maybe, Report, ReportKind, ReportLevel, ReportSender, SpanToLabel};
 use ParserError::*;
 use ariadne::Color;
@@ -142,28 +142,30 @@ impl<'contents> Parser<'contents> {
     //     Ok(())
     // }
 
-    fn consume_line_or(&mut self, expect: TokenKind) -> Maybe<()> {
+    fn consume_line_or(&mut self, expect: TokenKind) -> Maybe<bool> {
         match self.current {
             Token {
                 kind: TokenKind::Semicolon,
                 ..
-            } => self.advance(),
+            } => {
+                self.advance();
+                Ok(true)
+            }
             Token {
                 kind: TokenKind::EOF,
                 ..
-            } => (),
-            token if token.newline_before || token.kind == expect => (),
+            } => Ok(false),
+            token if token.newline_before || token.kind == expect => Ok(false),
             token => {
-                return Err(UnexpectedToken(token.kind)
+                Err(UnexpectedToken(token.kind)
                     .make_labeled(
                         token
                             .span
                             .labeled(format!("Expected end of statement or {:?}", expect)),
                     )
-                    .into());
+                    .into())
             }
         }
-        Ok(())
     }
 
     fn consume_one(&mut self, expect: TokenKind) -> Maybe<Token<'contents>> {
@@ -192,8 +194,13 @@ impl<'contents> Parser<'contents> {
 
         while self.current.kind != closer && self.current.kind != TokenKind::EOF {
             match self.parse_statement() {
-                Ok(stmt) => match self.consume_line_or(closer) {
-                    Ok(_) => stmts.push(*stmt),
+                Ok(mut stmt) => match self.consume_line_or(closer) {
+                    Ok(had_semicolon) => {
+                        if had_semicolon {
+                            stmt.expr = true;
+                        }
+                        stmts.push(*stmt);
+                    }
                     Err(e) => sync!(e),
                 },
                 Err(e) => sync!(e),
@@ -206,36 +213,27 @@ impl<'contents> Parser<'contents> {
     fn parse_statement(&mut self) -> Maybe<Box<Node>> {
         let Token { kind, span, .. } = self.current;
         let stmt = match kind {
-            TokenKind::LeftBrace => {
-                let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
-                let block = self.parse_block(block_start, TokenKind::RightBrace)?;
-                Ok(block)
-            }
-            TokenKind::If => {
-                self.advance();
-                self.consume_one(TokenKind::LeftParen)?;
-                let condition = self.parse_expression(0)?;
-                self.consume_one(TokenKind::RightParen)?;
-                let block_start = self.consume_one(TokenKind::LeftBrace)?;
-                let then_block = self.parse_block(block_start.span, TokenKind::RightBrace)?;
-                let mut span = span.extend(then_block.span);
-                let else_block = (self.current.kind == TokenKind::Else)
-                    .then::<Maybe<_>, _>(|| {
-                        self.advance();
-                        let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
-                        let else_block = self.parse_block(block_start, TokenKind::RightBrace)?;
-                        span = span.extend(else_block.span);
-                        Ok(else_block)
-                    })
-                    .transpose()?;
-                Ok(NodeKind::If(condition, then_block, else_block)
-                    .make(span)
-                    .into())
-            }
             TokenKind::Global => {
                 self.advance();
                 let name = self.consume_one(TokenKind::Identifier)?;
                 let mut span = span.extend(name.span);
+                
+                let type_annotation = if self.current.kind == TokenKind::Colon {
+                    self.advance();
+                    let type_name = self.consume_one(TokenKind::Identifier)?;
+                    span = span.extend(type_name.span);
+                    match Type::from_str(type_name.text) {
+                        Some(ty) => Some(ty),
+                        None => {
+                            return Err(SyntaxError(format!("Unknown type: {}", type_name.text))
+                                .make_labeled(type_name.span.label())
+                                .into());
+                        }
+                    }
+                } else {
+                    None
+                };
+                
                 let expr = (self.current.kind == TokenKind::Equals)
                     .then::<Maybe<_>, _>(|| {
                         self.advance();
@@ -245,24 +243,9 @@ impl<'contents> Parser<'contents> {
                     })
                     .transpose()?;
 
-                Ok(NodeKind::GlobalDeclaration(name.text.to_string(), expr)
+                Ok(NodeKind::GlobalDeclaration(name.text.to_string(), type_annotation, expr, None)
                     .make(span)
                     .into())
-            }
-            TokenKind::Loop => {
-                self.advance();
-                let condition = (self.current.kind == TokenKind::LeftParen)
-                    .then::<Maybe<_>, _>(|| {
-                        self.advance();
-                        let expr = self.parse_expression(0)?;
-                        self.consume_one(TokenKind::RightParen)?;
-                        Ok(expr)
-                    })
-                    .transpose()?;
-                let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
-                let body = self.parse_block(block_start, TokenKind::RightBrace)?;
-                let span = span.extend(body.span);
-                Ok(NodeKind::Loop(condition, body).make(span).into())
             }
             TokenKind::Break => {
                 self.advance();
@@ -282,11 +265,57 @@ impl<'contents> Parser<'contents> {
             }
             TokenKind::Let => {
                 self.advance();
-                let name = self.consume_one(TokenKind::Identifier)?.text.to_string();
+                let name_token = self.consume_one(TokenKind::Identifier)?;
+                let name = name_token.text.to_string();
+                let mut span = span.extend(name_token.span);
+
+                let type_annotation = if self.current.kind == TokenKind::Colon {
+                    self.advance();
+                    let type_name = self.consume_one(TokenKind::Identifier)?;
+                    span = span.extend(type_name.span);
+                    match Type::from_str(type_name.text) {
+                        Some(ty) => Some(ty),
+                        None => {
+                            return Err(SyntaxError(format!("Unknown type: {}", type_name.text))
+                                .make_labeled(type_name.span.label())
+                                .into());
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 self.consume_one(TokenKind::Equals)?;
                 let expr = self.parse_expression(0)?;
                 let span = span.extend(expr.span);
-                Ok(NodeKind::LocalDeclaration(name, expr).make(span).into())
+                Ok(NodeKind::LocalDeclaration(name, type_annotation, expr, None).make(span).into())
+            }
+            TokenKind::Const => {
+                self.advance();
+                let name_token = self.consume_one(TokenKind::Identifier)?;
+                let name = name_token.text.to_string();
+                let mut span = span.extend(name_token.span);
+
+                let type_annotation = if self.current.kind == TokenKind::Colon {
+                    self.advance();
+                    let type_name = self.consume_one(TokenKind::Identifier)?;
+                    span = span.extend(type_name.span);
+                    match Type::from_str(type_name.text) {
+                        Some(ty) => Some(ty),
+                        None => {
+                            return Err(SyntaxError(format!("Unknown type: {}", type_name.text))
+                                .make_labeled(type_name.span.label())
+                                .into());
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                self.consume_one(TokenKind::Equals)?;
+                let expr = self.parse_expression(0)?;
+                let span = span.extend(expr.span);
+                Ok(NodeKind::ConstDeclaration(name, type_annotation, expr).make(span).into())
             }
             TokenKind::Echo => {
                 self.advance();
@@ -319,7 +348,6 @@ impl<'contents> Parser<'contents> {
             }
             _ => self.parse_expression(0),
         };
-        self.consume_line_or(TokenKind::EOF)?;
         stmt
     }
 
@@ -406,7 +434,6 @@ impl<'contents> Parser<'contents> {
                 lhs = NodeKind::BinaryOperation(op, lhs, rhs).make(span).into();
             }
         }
-        lhs.expr = true;
         Ok(lhs)
     }
 
@@ -415,6 +442,52 @@ impl<'contents> Parser<'contents> {
             kind, text, span, ..
         } = self.current;
         match kind {
+            TokenKind::LeftBrace => {
+                let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
+                self.parse_block(block_start, TokenKind::RightBrace)
+            }
+            TokenKind::If => {
+                self.advance();
+                self.consume_one(TokenKind::LeftParen)?;
+                let condition = self.parse_expression(0)?;
+                self.consume_one(TokenKind::RightParen)?;
+                let block_start = self.consume_one(TokenKind::LeftBrace)?;
+                let then_block = self.parse_block(block_start.span, TokenKind::RightBrace)?;
+                let mut span = span.extend(then_block.span);
+                let else_block = (self.current.kind == TokenKind::Else)
+                    .then::<Maybe<_>, _>(|| {
+                        self.advance();
+                        if self.current.kind == TokenKind::If {
+                            let else_if = self.parse_atom()?;
+                            span = span.extend(else_if.span);
+                            Ok(else_if)
+                        } else {
+                            let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
+                            let else_block = self.parse_block(block_start, TokenKind::RightBrace)?;
+                            span = span.extend(else_block.span);
+                            Ok(else_block)
+                        }
+                    })
+                    .transpose()?;
+                Ok(NodeKind::If(condition, then_block, else_block)
+                    .make(span)
+                    .into())
+            }
+            TokenKind::Loop => {
+                self.advance();
+                let condition = (self.current.kind == TokenKind::LeftParen)
+                    .then::<Maybe<_>, _>(|| {
+                        self.advance();
+                        let expr = self.parse_expression(0)?;
+                        self.consume_one(TokenKind::RightParen)?;
+                        Ok(expr)
+                    })
+                    .transpose()?;
+                let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
+                let body = self.parse_block(block_start, TokenKind::RightBrace)?;
+                let span = span.extend(body.span);
+                Ok(NodeKind::Loop(condition, body).make(span).into())
+            }
             TokenKind::LeftParen => {
                 self.advance();
                 let mut expr = self.parse_expression(0)?;
@@ -424,7 +497,7 @@ impl<'contents> Parser<'contents> {
             }
             TokenKind::Identifier => {
                 self.advance();
-                Ok(NodeKind::Identifier(text.to_string()).make(span).into())
+                Ok(NodeKind::Identifier(text.to_string(), None).make(span).into())
             }
             TokenKind::StringLiteral => {
                 self.advance();

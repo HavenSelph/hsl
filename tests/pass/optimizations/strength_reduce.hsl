@@ -1,0 +1,20 @@
+/// bc: ShiftLeft
+/// bc: Multiply
+/// bc: BitwiseAnd
+/// out:
+/// 20
+/// 25
+/// 3
+
+let a = 10
+
+// x * 2 -> x << 1 (strength reduced to shift)
+echo a * 2
+
+// x ** 2 -> x * x (strength reduced to multiply)
+let b = 5
+echo b ** 2
+
+// x % 8 -> x & 7 (strength reduced to bitwise and)
+let c = 11
+echo c % 8

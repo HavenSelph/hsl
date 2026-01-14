@@ -12,15 +12,20 @@ mod vm;
 
 use crate::args::{ARGS, Commands};
 use crate::ast::parser::Parser;
+use crate::compiler::pass::run_passes;
 use crate::compiler::Compiler;
 use crate::report::{ReportChannel, UnwrapReport};
 use crate::vm::VM;
 
 fn run_file(filename: &'static str, vm: &mut VM, report_channel: &mut ReportChannel) {
-    let ast = Parser::new(filename, report_channel.get_sender())
+    let mut ast = Parser::new(filename, report_channel.get_sender())
         .unwrap_reported()
         .parse();
     report_channel.check_reports_and_exit();
+    
+    run_passes(&mut ast, report_channel.get_sender());
+    report_channel.check_reports_and_exit();
+    
     dprintln!("{ast}");
 
     let mut chunk = {

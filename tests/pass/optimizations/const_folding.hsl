@@ -1,0 +1,26 @@
+/// bc: IntegerLiteral(2)
+/// bc: IntegerLiteral(34)
+/// bc: StringLiteral("Hello World")
+/// bc: BooleanLiteral(true)
+/// bc: BooleanLiteral(false)
+/// out:
+/// 2
+/// 34
+/// Hello World
+/// true
+/// false
+
+// Constant folding: 1+1 should become 2 at compile time
+echo 1 + 1
+
+// More complex: 10 * 3 + 4 should become 34
+echo 10 * 3 + 4
+
+// String concatenation
+echo "Hello " + "World"
+
+// Comparison folding
+echo 1 < 2
+
+// Compound comparison folding
+echo 1 < 2 < 1
