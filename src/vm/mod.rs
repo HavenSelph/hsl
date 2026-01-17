@@ -1,24 +1,9 @@
 pub use crate::compiler::bytecode::{Chunk, OpCode};
-use crate::report::{Maybe, ReportKind, ReportLevel};
+use crate::report::Maybe;
 pub use crate::vm::value::Value;
 
 pub mod value;
 
-enum VMError {
-    GlobalNotFound(String),
-}
-
-impl ReportKind for VMError {
-    fn title(&self) -> String {
-        match self {
-            VMError::GlobalNotFound(name) => format!("Global '{}' not found.", name),
-        }
-    }
-
-    fn level(&self) -> ReportLevel {
-        ReportLevel::Error
-    }
-}
 
 pub struct Scope {
     depth: usize,
@@ -55,7 +40,6 @@ impl Scope {
 pub struct VM {
     ip: usize,
     stack: Vec<Value>,
-    globals: Vec<(String, Value)>,
     scope: Scope,
 }
 
@@ -64,22 +48,7 @@ impl VM {
         Self {
             ip: 0,
             stack: Vec::new(),
-            globals: Vec::new(),
             scope: Scope::new(),
-        }
-    }
-
-    pub fn set_global(&mut self, key: &str, value: Value) {
-        match self.globals.iter_mut().find(|v| v.0 == key) {
-            Some((_, val)) => *val = value,
-            None => self.globals.push((key.to_string(), value)),
-        }
-    }
-
-    pub fn get_global(&self, key: &str) -> Maybe<Value> {
-        match self.globals.iter().find(|v| v.0 == key) {
-            Some((_, val)) => Ok(val.clone()),
-            None => Err(VMError::GlobalNotFound(key.to_string()).make().into()),
         }
     }
 
@@ -182,15 +151,6 @@ impl VM {
             OpCode::LoadLocal => {
                 let idx = chunk.read_u16(&mut self.ip) as usize;
                 self.stack.push(self.scope.variables[idx].1.clone());
-            }
-            OpCode::LoadGlobal => {
-                let key = chunk.read_string(&mut self.ip);
-                self.stack.push(self.get_global(&key)?);
-            }
-            OpCode::SetGlobal => {
-                let key = chunk.read_string(&mut self.ip);
-                let val = self.stack.last().unwrap().clone();
-                self.set_global(&key, val);
             }
             OpCode::PushScope => self.scope.push(),
             OpCode::PopScope => self.scope.pop(),

@@ -58,6 +58,16 @@ impl Compiler {
         }
     }
 
+    pub fn push_scope(&mut self) {
+        self.local_count.push(0);
+        self.chunk.write_op(OpCode::PushScope);
+    }
+
+    pub fn pop_scope(&mut self) {
+        self.local_count.pop();
+        self.chunk.write_op(OpCode::PopScope);
+    }
+
     pub fn compile_program(&mut self, program: &Node) {
         let NodeKind::Block(stmts) = &program.kind else {
             unreachable!()
@@ -70,37 +80,24 @@ impl Compiler {
         }
     }
 
+    pub fn compile_block(&mut self, stmts: &[Node]) {
+        for stmt in stmts.iter() {
+            self.compile_statement(stmt);
+        }
+    }
+
+    pub fn compile_block_with_scope(&mut self, stmts: &[Node]) {
+        self.push_scope();
+        self.compile_block(stmts);
+        self.pop_scope();
+    }
+
     pub fn compile_statement(&mut self, node: &Node) {
         match &node.kind {
-            NodeKind::Block(stmts) => {
-                self.local_count.push(0);
-                self.chunk.write_op(OpCode::PushScope);
-                let len = stmts.len();
-                for (i, stmt) in stmts.iter().enumerate() {
-                    let is_last = i == len - 1;
-                    if is_last && !stmt.expr {
-                        self.compile_expression(stmt);
-                    } else {
-                        self.compile_statement(stmt);
-                    }
-                }
-                if len == 0 {
-                    self.chunk.write_op(OpCode::Nada);
-                }
-                self.local_count.pop();
-                self.chunk.write_op(OpCode::PopScope);
-            }
+            NodeKind::Block(stmts) => self.compile_block_with_scope(stmts),
             NodeKind::Echo(expr) => {
                 self.compile_expression(expr);
                 self.chunk.write_op(OpCode::Echo);
-            }
-            NodeKind::GlobalDeclaration(_name, _ty, expr, _) => {
-                if let Some(val) = expr {
-                    self.compile_expression(val);
-                    self.chunk.write_op(OpCode::SetGlobal);
-                    self.chunk.write_string(_name);
-                    self.chunk.write_op(OpCode::Pop);
-                }
             }
             NodeKind::LocalDeclaration(_name, _ty, expr, resolved_idx) => {
                 self.compile_expression(expr);
@@ -129,7 +126,7 @@ impl Compiler {
                 self.chunk.write_u8(1);
                 self.chunk.patch_jump(jump);
             }
-            NodeKind::If(condition, then_block, else_block) if !node.expr => {
+            NodeKind::If(condition, then_block, else_block) if node.expr => {
                 self.compile_expression(condition);
                 let else_jump = self.chunk.write_jump(OpCode::JumpIfFalse);
                 self.compile_statement(then_block);
@@ -141,9 +138,12 @@ impl Compiler {
                     self.chunk.patch_jump(then_jump);
                 }
             }
+            NodeKind::ConstDeclaration(..) => {
+                // Const declarations produce no bytecode - they're inlined at compile time
+            }
             _ => {
                 self.compile_expression(node);
-                if node.expr {
+                if !node.expr {
                     self.chunk.write_op(OpCode::Pop);
                 }
             }
@@ -159,22 +159,22 @@ impl Compiler {
 
         match &node.kind {
             NodeKind::Block(stmts) => {
-                self.local_count.push(0);
-                self.chunk.write_op(OpCode::PushScope);
+                self.push_scope();
                 let len = stmts.len();
                 for (i, stmt) in stmts.iter().enumerate() {
                     let is_last = i == len - 1;
-                    if is_last && !stmt.expr {
+                    if is_last && stmt.expr {
+                        // Last statement is an expression - compile as expression
                         self.compile_expression(stmt);
                     } else {
+                        // Statement or not last - compile as statement
                         self.compile_statement(stmt);
                     }
                 }
                 if len == 0 {
                     self.chunk.write_op(OpCode::Nada);
                 }
-                self.local_count.pop();
-                self.chunk.write_op(OpCode::PopScope);
+                self.pop_scope();
             }
             NodeKind::If(condition, then_block, else_block) => {
                 self.compile_expression(condition);
@@ -226,14 +226,10 @@ impl Compiler {
             NodeKind::BinaryOperation(Operator::Assign, lhs, rhs) => {
                 self.compile_expression(rhs);
                 match &lhs.kind {
-                    NodeKind::Identifier(name, Some(resolved)) => match resolved.kind {
+                    NodeKind::Identifier(_, Some(resolved)) => match resolved.kind {
                         crate::ast::VariableKind::Local => {
                             self.chunk
                                 .write_op_with_u16(OpCode::SetLocal, resolved.index);
-                        }
-                        crate::ast::VariableKind::Global => {
-                            self.chunk.write_op(OpCode::SetGlobal);
-                            self.chunk.write_string(name);
                         }
                     },
                     NodeKind::Identifier(name, None) => {
@@ -303,14 +299,10 @@ impl Compiler {
                 self.local_count.pop();
                 self.chunk.write_op(OpCode::PopScope);
             }
-            NodeKind::Identifier(name, Some(resolved)) => match resolved.kind {
+            NodeKind::Identifier(_, Some(resolved)) => match resolved.kind {
                 crate::ast::VariableKind::Local => {
                     self.chunk
                         .write_op_with_u16(OpCode::LoadLocal, resolved.index);
-                }
-                crate::ast::VariableKind::Global => {
-                    self.chunk.write_op(OpCode::LoadGlobal);
-                    self.chunk.write_string(name);
                 }
             },
             NodeKind::Identifier(name, None) => {
@@ -363,15 +355,6 @@ impl Compiler {
                 let idx = resolved_idx.expect("LocalDeclaration should have resolved index");
                 *self.local_count.last_mut().unwrap() += 1;
                 self.chunk.write_op_with_u16(OpCode::SetLocal, idx);
-                self.chunk.write_op(OpCode::Nada);
-            }
-            NodeKind::GlobalDeclaration(_name, _ty, expr, _) => {
-                if let Some(val) = expr {
-                    self.compile_expression(val);
-                    self.chunk.write_op(OpCode::SetGlobal);
-                    self.chunk.write_string(_name);
-                    self.chunk.write_op(OpCode::Pop);
-                }
                 self.chunk.write_op(OpCode::Nada);
             }
             NodeKind::ConstDeclaration(_, _, _) => (),

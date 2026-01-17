@@ -1,11 +1,10 @@
 #![allow(unused)]
 use crate::args::ARGS;
 use crate::ast::span::Span;
-use crate::files::ScannerCache;
-use ariadne::{Color, Config};
+use crate::files::get_source;
 use name_variant::NamedVariant;
 use owo_colors::colors::CustomColor;
-use owo_colors::{AnsiColors, OwoColorize};
+use owo_colors::{AnsiColors, DynColors, OwoColorize};
 use std::fmt::Display;
 use std::io;
 use std::io::Write;
@@ -19,66 +18,63 @@ pub type MaybeErrorless<T> = Result<T, ()>;
 #[derive(Clone)]
 pub struct Label {
     span: Span,
-    message: Option<String>,
-    color: Option<Color>,
-    priority: Option<i32>,
+    color: Option<AnsiColors>,
+    front_message: Option<String>,
+    back_message: Option<String>,
 }
 
 impl Label {
     pub fn new(span: Span) -> Self {
         Self {
             span,
-            message: None,
             color: None,
-            priority: None,
+            front_message: None,
+            back_message: None,
         }
     }
-    pub fn set_message<T: Display>(&mut self, message: T) -> &mut Self {
-        self.message = Some(message.to_string());
-        self
-    }
 
-    pub fn with_message<T: Display>(mut self, message: T) -> Self {
-        self.set_message(message);
-        self
-    }
-    pub fn set_color(&mut self, color: Color) -> &mut Self {
+    pub fn set_color(&mut self, color: AnsiColors) -> &mut Self {
         self.color = Some(color);
         self
     }
 
-    pub fn with_color(mut self, color: Color) -> Self {
+    pub fn with_color(mut self, color: AnsiColors) -> Self {
         self.set_color(color);
         self
     }
 
-    pub fn set_priority(&mut self, priority: i32) -> &mut Self {
-        self.priority = Some(priority);
+    pub fn set_front_message<T: Display>(&mut self, message: T) -> &mut Self {
+        self.front_message = Some(message.to_string());
         self
     }
 
-    pub fn with_priority(mut self, priority: i32) -> Self {
-        self.set_priority(priority);
+    pub fn with_front_message<T: Display>(mut self, message: T) -> Self {
+        self.set_front_message(message);
         self
     }
 
-    fn as_ariadne_label(&self, level: ReportLevel) -> ariadne::Label<Span> {
-        let mut label =
-            ariadne::Label::new(self.span).with_color(if let Some(color) = self.color {
-                color
-            } else {
-                level.into()
-            });
-        if let Some(text) = self.message.clone() {
-            label = label.with_message(text);
-        }
-        if let Some(priority) = self.priority {
-            label = label.with_priority(priority)
-        }
-        label
+    pub fn set_back_message<T: Display>(&mut self, message: T) -> &mut Self {
+        self.back_message = Some(message.to_string());
+        self
+    }
+
+    pub fn with_back_message<T: Display>(mut self, message: T) -> Self {
+        self.set_back_message(message);
+        self
+    }
+
+    /// Convenience method to set the back message (most common use case)
+    pub fn set_message<T: Display>(&mut self, message: T) -> &mut Self {
+        self.set_back_message(message)
+    }
+
+    pub fn with_message<T: Display>(mut self, message: T) -> Self {
+        self.set_back_message(message);
+        self
     }
 }
-pub trait SpanToLabel<T: ariadne::Span>: ariadne::Span {
+
+pub trait SpanToLabel {
     fn label(&self) -> Label;
 
     fn labeled<M: Display>(&self, message: M) -> Label {
@@ -86,7 +82,7 @@ pub trait SpanToLabel<T: ariadne::Span>: ariadne::Span {
     }
 }
 
-impl SpanToLabel<Span> for Span {
+impl SpanToLabel for Span {
     fn label(&self) -> Label {
         Label::new(*self)
     }
@@ -137,13 +133,13 @@ where
             level: self.level(),
             help: None,
             note: None,
-            labels: Vec::new(),
+            label: None,
             incomplete: self.incomplete(),
         }
     }
 
     fn make_labeled(self, label: Label) -> ReportBuilder {
-        self.make().with_label(label.with_priority(1))
+        self.make().with_label(label)
     }
 
     fn incomplete(self) -> bool {
@@ -157,28 +153,17 @@ use clap::ValueEnum;
 pub enum ReportLevel {
     Silent,
     Error,
-    Warn,
+    Warning,
     Advice,
 }
 
-impl From<ReportLevel> for ariadne::ReportKind<'_> {
-    fn from(value: ReportLevel) -> Self {
-        match value {
-            ReportLevel::Error => Self::Error,
-            ReportLevel::Warn => Self::Warning,
-            ReportLevel::Advice => Self::Advice,
-            ReportLevel::Silent => panic!("Turned SILENT into report kind"),
-        }
-    }
-}
-
-impl From<ReportLevel> for Color {
-    fn from(value: ReportLevel) -> Self {
-        match value {
-            ReportLevel::Advice => Color::BrightBlue,
-            ReportLevel::Warn => Color::Yellow,
-            ReportLevel::Error => Color::Red,
-            ReportLevel::Silent => panic!("Turned SILENT into color"),
+impl ReportLevel {
+    fn color(&self) -> AnsiColors {
+        match self {
+            ReportLevel::Advice => AnsiColors::Blue,
+            ReportLevel::Warning => AnsiColors::Yellow,
+            ReportLevel::Error => AnsiColors::Red,
+            ReportLevel::Silent => unreachable!(),
         }
     }
 }
@@ -189,7 +174,7 @@ pub struct ReportBuilder {
     pub title: String,
     pub help: Option<String>,
     pub note: Option<String>,
-    pub labels: Vec<Label>,
+    pub label: Option<Label>,
     pub incomplete: bool,
 }
 
@@ -214,13 +199,13 @@ impl ReportBuilder {
         self
     }
 
-    pub fn push_label(&mut self, label: Label) -> &mut Self {
-        self.labels.push(label);
+    pub fn set_label(&mut self, label: Label) -> &mut Self {
+        self.label = Some(label);
         self
     }
 
     pub fn with_label(mut self, label: Label) -> Self {
-        self.push_label(label);
+        self.set_label(label);
         self
     }
 
@@ -240,7 +225,7 @@ impl ReportBuilder {
             title: self.title,
             help: self.help,
             note: self.note,
-            labels: self.labels,
+            label: self.label,
             incomplete: self.incomplete,
         }
     }
@@ -267,76 +252,194 @@ pub struct Report {
     title: String,
     help: Option<String>,
     note: Option<String>,
-    labels: Vec<Label>,
+    label: Option<Label>,
     pub incomplete: bool,
 }
 
 impl Report {
-    fn into_ariadne_report(self) -> ariadne::Report<'static, Span> {
-        let mut builder = ariadne::Report::build(
-            self.level.into(),
-            self.labels
-                .first()
-                .expect("Context report invoked on non-spanned error")
-                .span,
-        )
-        .with_message(self.title)
-        .with_config(Config::default().with_compact(true))
-        .with_labels(
-            self.labels
-                .iter()
-                .map(|label| label.as_ariadne_label(self.level)),
-        );
-        if let Some(help) = self.help {
-            builder.set_help(help);
+    /// Writes only the source context lines for a label's span.
+    /// Handles multi-line spans with truncation (shows first 2 and last 2 lines if > 4 lines).
+    fn write_source_context<W: Write>(&self, dst: &mut W, label: &Label, line_num_width: usize) {
+        let span = label.span;
+        let source = match get_source(span.filename) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let start_loc = span.start_location();
+        let end_loc = span.end_location();
+        let start_line = start_loc.line;
+        let end_line = end_loc.line;
+        let color = label.color.unwrap_or_else(|| self.level.color());
+        let pipe = "│".bright_black();
+
+        // Determine which lines to show
+        let total_lines = end_line - start_line + 1;
+        let lines_to_show: Vec<usize> = if total_lines <= 4 {
+            (start_line..=end_line).collect()
+        } else {
+            // Show first 2 and last 2 lines
+            vec![start_line, start_line + 1, end_line - 1, end_line]
+        };
+
+        let mut prev_line: Option<usize> = None;
+        let mut is_first_line = true;
+        let mut is_last_line;
+
+        for (idx, line_num) in lines_to_show.iter().enumerate() {
+            is_last_line = idx == lines_to_show.len() - 1;
+
+            // Check if we need to show "N lines hidden..." message
+            if let Some(prev) = prev_line {
+                if *line_num > prev + 1 {
+                    let hidden = line_num - prev - 1;
+                    let _ = writeln!(
+                        dst,
+                        "{}",
+                        format!(
+                            " {:>width$} │ {} lines hidden...",
+                            "",
+                            hidden,
+                            width = line_num_width
+                        )
+                        .bright_black()
+                    );
+                }
+            }
+
+            let Some(line_content) = source.get_line(*line_num) else {
+                prev_line = Some(*line_num);
+                continue;
+            };
+
+            // Write front message before first line if present
+            if is_first_line {
+                if let Some(ref msg) = label.front_message {
+                    let _ = writeln!(
+                        dst,
+                        " {:>width$} {} {}",
+                        "",
+                        "╭".color(color),
+                        msg.color(color),
+                        width = line_num_width
+                    );
+                }
+            }
+
+            // Write the source line
+            let _ = write!(
+                dst,
+                " {:>width$} {} ",
+                line_num.bright_black(),
+                pipe,
+                width = line_num_width
+            );
+
+            // Determine highlighting range for this line
+            let (highlight_start, highlight_end) =
+                if *line_num == start_line && *line_num == end_line {
+                    // Single line span
+                    (start_loc.column, end_loc.column)
+                } else if *line_num == start_line {
+                    // First line of multi-line span
+                    (start_loc.column, line_content.len() + 1)
+                } else if *line_num == end_line {
+                    // Last line of multi-line span
+                    (1, end_loc.column)
+                } else {
+                    // Middle line - highlight entire line
+                    (1, line_content.len() + 1)
+                };
+
+            // Print the line with highlighting
+            for (i, ch) in line_content.chars().enumerate() {
+                let col = i + 1;
+                if col >= highlight_start && col < highlight_end {
+                    let _ = write!(dst, "{}", ch.to_string().color(color));
+                } else {
+                    let _ = write!(dst, "{}", ch);
+                }
+            }
+            let _ = writeln!(dst);
+
+            // Write back message after last line if present
+            if is_last_line {
+                if let Some(ref msg) = label.back_message {
+                    let _ = writeln!(
+                        dst,
+                        " {:>width$} {} {}",
+                        "",
+                        "╰".color(color),
+                        msg.color(color),
+                        width = line_num_width
+                    );
+                }
+            }
+
+            prev_line = Some(*line_num);
+            is_first_line = false;
         }
-        if let Some(note) = self.note {
-            builder.set_note(note);
-        }
-        builder.finish()
     }
 
     pub fn write<W: Write>(self, mut dst: W, config: ReportConfig) {
-        if !config.compact && (config.context && !self.labels.is_empty()) {
-            self.into_ariadne_report()
-                .write(ScannerCache {}, dst)
-                .expect("Failed to write error via ariadne.");
-            return;
+        // Write the header: "Error: message" or "Warning: message"
+        let header = format!("{}:", self.level.variant_name());
+        let _ = write!(dst, "{} ", header.color(self.level.color()));
+
+        // For compact mode, include span in header
+        if config.compact {
+            if let Some(ref label) = self.label {
+                let _ = write!(dst, "[ {} ] ", label.span);
+            }
         }
 
-        let compact_span = config.compact || (self.note.is_none() && self.help.is_none());
-        writeln!(
-            dst,
-            "{} {}",
-            format!(
-                "{}{}:",
-                if compact_span && !self.labels.is_empty() {
-                    format!("[{}] ", self.labels.first().unwrap().span)
-                } else {
-                    "".to_string()
-                },
-                self.level.variant_name()
-            )
-            .color(match self.level {
-                ReportLevel::Advice => AnsiColors::Blue,
-                ReportLevel::Warn => AnsiColors::Yellow,
-                ReportLevel::Error => AnsiColors::Red,
-                ReportLevel::Silent => unreachable!(),
-            }),
-            self.title
-        );
+        let _ = writeln!(dst, "{}", self.title);
+
         if config.compact {
             return;
         }
-        if !compact_span && !self.labels.is_empty() {
-            write!(dst, "  ");
-            if !config.compact && (self.help.is_some() || self.note.is_some()) {
-                write!(dst, "{}", "╭─".bright_black());
+
+        // Write source context if enabled and we have a label
+        if let Some(ref label) = self.label {
+            // Calculate line number width based on the end line
+            let end_line = label.span.end_location().line;
+            let line_num_width = end_line.to_string().len().max(3);
+
+            // Header with location
+            let _ = writeln!(
+                dst,
+                "  {:>width$}{}{}{}",
+                "",
+                "╭─[".bright_black(),
+                format!(" {} ", label.span),
+                "]".bright_black(),
+                width = line_num_width
+            );
+
+            // Empty line with pipe
+            let _ = writeln!(
+                dst,
+                " {:>width$} {}",
+                "",
+                "│".bright_black(),
+                width = line_num_width
+            );
+
+            if config.context {
+                self.write_source_context(&mut dst, label, line_num_width);
             }
-            writeln!(dst, "[{}] ", self.labels.first().unwrap().span);
+
+            // Footer
+            let _ = writeln!(
+                dst,
+                "{}",
+                format!("{}╯", "─".repeat(line_num_width + 2)).bright_black()
+            );
         }
+
+        // Write help if present
         if let Some(help) = self.help {
-            writeln!(
+            let _ = writeln!(
                 dst,
                 "  {} {}: {}",
                 "│".bright_black(),
@@ -344,8 +447,10 @@ impl Report {
                 help
             );
         }
+
+        // Write note if present
         if let Some(note) = self.note {
-            writeln!(
+            let _ = writeln!(
                 dst,
                 "  {} {}: {}",
                 "│".bright_black(),
@@ -414,7 +519,6 @@ impl ReportChannel {
 
     pub fn check_reports(&mut self) -> ExitStatus {
         let mut errors = 0usize;
-        let mut buffer: Vec<u8> = Vec::new();
         let config = ReportConfig::default();
         for report in self.receiver.try_iter() {
             if report.level == ReportLevel::Error {
@@ -423,14 +527,13 @@ impl ReportChannel {
             if !Self::should_display(&*report) || self.reported == ARGS.max_reports {
                 continue;
             }
-            report.write(&mut buffer, config);
+            report.eprint(config);
             self.reported += 1;
         }
         if errors > 0 {
             if ARGS.report_level != ReportLevel::Silent {
                 eprintln!(
-                    "{}{}",
-                    std::str::from_utf8(&buffer).unwrap(),
+                    "{}",
                     format_args!("Failed with {errors} errors emitted.").red()
                 );
             }

@@ -21,7 +21,6 @@ pub enum TokenKind {
     Equals,
     EqualsEquals,
     FloatLiteral,
-    Global,
     Greater,
     GreaterEquals,
     GreaterGreater,

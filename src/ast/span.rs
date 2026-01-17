@@ -3,11 +3,10 @@ use crate::report::UnwrapReport;
 use std::fmt::{Debug, Display, Formatter};
 
 pub struct Location {
-    filename: &'static str,
-    index: usize,
-    line_index: usize,
-    line: usize,
-    column: usize,
+    pub filename: &'static str,
+    pub index: usize,
+    pub line: usize,
+    pub column: usize,
 }
 
 impl Location {
@@ -17,25 +16,15 @@ impl Location {
             return Self {
                 filename,
                 index,
-                line_index: 0,
                 line: 1,
                 column: 1,
             };
         }
-        let (line, line_index, column) = file.text()[..index].char_indices().fold(
-            (1usize, 0usize, 1usize),
-            |(line, line_index, column), (i, c)| {
-                if c == '\n' {
-                    (line + 1, i, 1)
-                } else {
-                    (line, line_index, column + 1)
-                }
-            },
-        );
+        let line = file.line_at(index);
+        let column = file.column_at(index);
         Self {
             filename,
             index,
-            line_index,
             line,
             column,
         }
@@ -83,6 +72,7 @@ impl Span {
     pub fn length(&self) -> usize {
         self.end - self.start
     }
+
     pub fn start_location(&self) -> Location {
         Location::at(self.filename, self.start)
     }
@@ -101,21 +91,5 @@ impl Display for Span {
 impl Debug for Span {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self}-{}", self.end_location())
-    }
-}
-
-impl ariadne::Span for Span {
-    type SourceId = &'static str;
-
-    fn source(&self) -> &Self::SourceId {
-        &self.filename
-    }
-
-    fn start(&self) -> usize {
-        self.start
-    }
-
-    fn end(&self) -> usize {
-        self.end
     }
 }

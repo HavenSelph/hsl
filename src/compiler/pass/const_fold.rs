@@ -13,70 +13,6 @@ impl ConstFoldPass {
         Self { reporter }
     }
 
-    fn fold_node(&mut self, node: &mut Node) {
-        match &mut node.kind {
-            NodeKind::Block(stmts) => {
-                for stmt in stmts.iter_mut() {
-                    self.fold_node(stmt);
-                }
-            }
-            NodeKind::UnaryOperation(op, operand) => {
-                self.fold_node(operand);
-                if let Some(folded) = self.try_fold_unary(*op, operand) {
-                    node.kind = folded;
-                }
-            }
-            NodeKind::BinaryOperation(op, lhs, rhs) => {
-                self.fold_node(lhs);
-                self.fold_node(rhs);
-                if let Some(folded) = self.try_fold_binary(*op, lhs, rhs) {
-                    node.kind = folded;
-                }
-            }
-            NodeKind::CompoundComparison(ops, operands) => {
-                for operand in operands.iter_mut() {
-                    self.fold_node(operand);
-                }
-                if let Some(folded) = self.try_fold_compound_comparison(ops, operands) {
-                    node.kind = folded;
-                }
-            }
-            NodeKind::If(condition, then_block, else_block) => {
-                self.fold_node(condition);
-                self.fold_node(then_block);
-                if let Some(else_b) = else_block {
-                    self.fold_node(else_b);
-                }
-            }
-            NodeKind::Loop(condition, body) => {
-                if let Some(cond) = condition {
-                    self.fold_node(cond);
-                }
-                self.fold_node(body);
-            }
-            NodeKind::LocalDeclaration(_, _, expr, _) => {
-                self.fold_node(expr);
-            }
-            NodeKind::GlobalDeclaration(_, _, expr, _) => {
-                if let Some(e) = expr {
-                    self.fold_node(e);
-                }
-            }
-            NodeKind::Echo(expr) => {
-                self.fold_node(expr);
-            }
-            NodeKind::Assert(expr, _) => {
-                self.fold_node(expr);
-            }
-            NodeKind::Break(value) => {
-                if let Some(val) = value {
-                    self.fold_node(val);
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn try_fold_unary(&self, op: Operator, operand: &Node) -> Option<NodeKind> {
         match op {
             Operator::UnaryMinus => match &operand.kind {
@@ -196,7 +132,37 @@ impl ConstFoldPass {
 }
 
 impl Pass for ConstFoldPass {
+    fn visit_unary(&mut self, node: &mut Node) {
+        if let NodeKind::UnaryOperation(op, operand) = &mut node.kind {
+            self.visit(operand);
+            if let Some(folded) = self.try_fold_unary(*op, operand) {
+                node.kind = folded;
+            }
+        }
+    }
+
+    fn visit_binary(&mut self, node: &mut Node) {
+        if let NodeKind::BinaryOperation(op, lhs, rhs) = &mut node.kind {
+            self.visit(lhs);
+            self.visit(rhs);
+            if let Some(folded) = self.try_fold_binary(*op, lhs, rhs) {
+                node.kind = folded;
+            }
+        }
+    }
+
+    fn visit_compound(&mut self, node: &mut Node) {
+        if let NodeKind::CompoundComparison(ops, operands) = &mut node.kind {
+            for operand in operands.iter_mut() {
+                self.visit(operand);
+            }
+            if let Some(folded) = self.try_fold_compound_comparison(ops, operands) {
+                node.kind = folded;
+            }
+        }
+    }
+
     fn run(&mut self, node: &mut Node) {
-        self.fold_node(node);
+        self.visit(node);
     }
 }

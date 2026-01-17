@@ -1,4 +1,4 @@
-use crate::ast::{Node, NodeKind, ResolvedVar, VariableKind};
+use crate::ast::{Node, NodeKind, Operator, ResolvedVar, VariableKind};
 use crate::compiler::pass::Pass;
 use crate::report::{ReportKind, ReportLevel, ReportSender, SpanToLabel};
 use std::collections::HashMap;
@@ -47,7 +47,6 @@ impl ReportKind for VarResolveError {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum InternalVarKind {
     Local,
-    Global,
     Const,
 }
 
@@ -76,7 +75,6 @@ pub struct VarResolvePass {
     reporter: ReportSender,
     scopes: Vec<Scope>,
     depth: usize,
-    global_count: usize,
 }
 
 impl VarResolvePass {
@@ -85,7 +83,6 @@ impl VarResolvePass {
             reporter,
             scopes: vec![Scope::new()],
             depth: 0,
-            global_count: 0,
         }
     }
 
@@ -128,11 +125,6 @@ impl VarResolvePass {
             InternalVarKind::Local => {
                 let idx = self.locals_count() as u16;
                 self.current_scope().local_count += 1;
-                idx
-            }
-            InternalVarKind::Global => {
-                let idx = self.global_count as u16;
-                self.global_count += 1;
                 idx
             }
             InternalVarKind::Const => 0,
@@ -178,153 +170,117 @@ impl VarResolvePass {
         }
     }
 
-    fn resolve_node(&mut self, node: &mut Node) {
-        match &mut node.kind {
-            NodeKind::Block(stmts) => {
-                self.push_scope();
-                for stmt in stmts.iter_mut() {
-                    self.resolve_node(stmt);
-                }
-                self.pop_scope();
-            }
-            NodeKind::ConstDeclaration(name, _ty, expr) => {
-                self.resolve_node(expr);
-
-                if !self.is_const_expr(expr) {
-                    self.reporter.report(
-                        VarResolveError::ConstNotCompileTime(name.clone())
-                            .make_labeled(expr.span.label())
-                            .finish()
-                            .into(),
-                    );
-                }
-
-                self.declare_variable(
-                    name.clone(),
-                    InternalVarKind::Const,
-                    Some(expr.clone()),
-                    node.span,
-                );
-            }
-            NodeKind::LocalDeclaration(name, _ty, expr, resolved_idx) => {
-                self.resolve_node(expr);
-                let idx = self.locals_count() as u16;
-                self.declare_variable(name.clone(), InternalVarKind::Local, None, node.span);
-                *resolved_idx = Some(idx);
-            }
-            NodeKind::GlobalDeclaration(name, _ty, expr, resolved_idx) => {
-                if let Some(e) = expr {
-                    self.resolve_node(e);
-                }
-                let idx = self.global_count as u16;
-                self.declare_variable(name.clone(), InternalVarKind::Global, None, node.span);
-                *resolved_idx = Some(idx);
-            }
-            NodeKind::Identifier(name, resolved) => {
-                if let Some(var) = self.lookup_variable(name) {
-                    if var.kind == InternalVarKind::Const {
-                        if let Some(const_val) = var.const_value {
-                            node.kind = const_val.kind.clone();
-                            node.ty = const_val.ty;
-                        }
-                    } else {
-                        // Set resolved variable info for non-const variables
-                        let ast_kind = match var.kind {
-                            InternalVarKind::Local => VariableKind::Local,
-                            InternalVarKind::Global => VariableKind::Global,
-                            InternalVarKind::Const => unreachable!(),
-                        };
-                        *resolved = Some(ResolvedVar {
-                            kind: ast_kind,
-                            index: var.index,
-                        });
+    fn resolve_identifier(&mut self, node: &mut Node) {
+        if let NodeKind::Identifier(name, resolved) = &mut node.kind {
+            if let Some(var) = self.lookup_variable(name) {
+                if var.kind == InternalVarKind::Const {
+                    if let Some(const_val) = var.const_value {
+                        node.kind = const_val.kind.clone();
+                        node.ty = const_val.ty;
                     }
                 } else {
+                    *resolved = Some(ResolvedVar {
+                        kind: VariableKind::Local,
+                        index: var.index,
+                    });
+                }
+            } else {
+                self.reporter.report(
+                    VarResolveError::VariableNotFound(name.clone())
+                        .make_labeled(node.span.label())
+                        .finish()
+                        .into(),
+                );
+            }
+        }
+    }
+
+    fn resolve_assignment(&mut self, lhs: &mut Node, rhs: &mut Node) {
+        self.visit(rhs);
+
+        if let NodeKind::Identifier(name, resolved) = &mut lhs.kind {
+            if let Some(var) = self.lookup_variable(name) {
+                if var.kind == InternalVarKind::Const {
                     self.reporter.report(
-                        VarResolveError::VariableNotFound(name.clone())
-                            .make_labeled(node.span.label())
+                        VarResolveError::CannotAssignToConst(name.clone())
+                            .make_labeled(lhs.span.label())
                             .finish()
                             .into(),
                     );
+                } else {
+                    *resolved = Some(ResolvedVar {
+                        kind: VariableKind::Local,
+                        index: var.index,
+                    });
                 }
+            } else {
+                self.reporter.report(
+                    VarResolveError::VariableNotFound(name.clone())
+                        .make_labeled(lhs.span.label())
+                        .finish()
+                        .into(),
+                );
             }
-            NodeKind::BinaryOperation(crate::ast::Operator::Assign, lhs, rhs) => {
-                self.resolve_node(rhs);
-
-                if let NodeKind::Identifier(name, resolved) = &mut lhs.kind {
-                    if let Some(var) = self.lookup_variable(name) {
-                        if var.kind == InternalVarKind::Const {
-                            self.reporter.report(
-                                VarResolveError::CannotAssignToConst(name.clone())
-                                    .make_labeled(lhs.span.label())
-                                    .finish()
-                                    .into(),
-                            );
-                        } else {
-                            // Set resolved variable info for assignment target
-                            let ast_kind = match var.kind {
-                                InternalVarKind::Local => VariableKind::Local,
-                                InternalVarKind::Global => VariableKind::Global,
-                                InternalVarKind::Const => unreachable!(),
-                            };
-                            *resolved = Some(ResolvedVar {
-                                kind: ast_kind,
-                                index: var.index,
-                            });
-                        }
-                    } else {
-                        self.reporter.report(
-                            VarResolveError::VariableNotFound(name.clone())
-                                .make_labeled(lhs.span.label())
-                                .finish()
-                                .into(),
-                        );
-                    }
-                }
-            }
-            NodeKind::BinaryOperation(_, lhs, rhs) => {
-                self.resolve_node(lhs);
-                self.resolve_node(rhs);
-            }
-            NodeKind::UnaryOperation(_, operand) => {
-                self.resolve_node(operand);
-            }
-            NodeKind::CompoundComparison(_, operands) => {
-                for operand in operands.iter_mut() {
-                    self.resolve_node(operand);
-                }
-            }
-            NodeKind::If(condition, then_block, else_block) => {
-                self.resolve_node(condition);
-                self.resolve_node(then_block);
-                if let Some(else_b) = else_block {
-                    self.resolve_node(else_b);
-                }
-            }
-            NodeKind::Loop(condition, body) => {
-                if let Some(cond) = condition {
-                    self.resolve_node(cond);
-                }
-                self.resolve_node(body);
-            }
-            NodeKind::Echo(expr) => {
-                self.resolve_node(expr);
-            }
-            NodeKind::Assert(expr, _) => {
-                self.resolve_node(expr);
-            }
-            NodeKind::Break(value) => {
-                if let Some(val) = value {
-                    self.resolve_node(val);
-                }
-            }
-            _ => {}
         }
     }
 }
 
 impl Pass for VarResolvePass {
+    fn visit_block(&mut self, node: &mut Node) {
+        self.push_scope();
+        if let NodeKind::Block(stmts) = &mut node.kind {
+            for stmt in stmts.iter_mut() {
+                self.visit(stmt);
+            }
+        }
+        self.pop_scope();
+    }
+
+    fn visit_local_decl(&mut self, node: &mut Node) {
+        if let NodeKind::LocalDeclaration(name, _ty, expr, resolved_idx) = &mut node.kind {
+            self.visit(expr);
+            let idx = self.locals_count() as u16;
+            self.declare_variable(name.clone(), InternalVarKind::Local, None, node.span);
+            *resolved_idx = Some(idx);
+        }
+    }
+
+    fn visit_const_decl(&mut self, node: &mut Node) {
+        if let NodeKind::ConstDeclaration(name, _ty, expr) = &mut node.kind {
+            self.visit(expr);
+
+            if !self.is_const_expr(expr) {
+                self.reporter.report(
+                    VarResolveError::ConstNotCompileTime(name.clone())
+                        .make_labeled(expr.span.label())
+                        .finish()
+                        .into(),
+                );
+            }
+
+            self.declare_variable(
+                name.clone(),
+                InternalVarKind::Const,
+                Some(expr.clone()),
+                node.span,
+            );
+        }
+    }
+
+    fn visit_identifier(&mut self, node: &mut Node) {
+        self.resolve_identifier(node);
+    }
+
+    fn visit_binary(&mut self, node: &mut Node) {
+        if let NodeKind::BinaryOperation(Operator::Assign, lhs, rhs) = &mut node.kind {
+            self.resolve_assignment(lhs, rhs);
+        } else if let NodeKind::BinaryOperation(_, lhs, rhs) = &mut node.kind {
+            self.visit(lhs);
+            self.visit(rhs);
+        }
+    }
+
     fn run(&mut self, node: &mut Node) {
-        self.resolve_node(node);
+        self.visit(node);
     }
 }

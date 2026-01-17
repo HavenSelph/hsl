@@ -2,7 +2,6 @@ use crate::ast::span::Span;
 use crate::ast::token::{Token, TokenKind};
 use crate::report::{Maybe, ReportKind, ReportLevel, SpanToLabel};
 use LexerReport::*;
-use ariadne::Color;
 use name_variant::NamedVariant;
 use std::fmt::{Display, Formatter};
 use std::iter::FusedIterator;
@@ -160,7 +159,6 @@ impl<'contents> Lexer<'contents> {
                         "or" => TokenKind::Or,
                         "and" => TokenKind::And,
                         "assert" => TokenKind::Assert,
-                        "global" => TokenKind::Global,
                         "const" => TokenKind::Const,
                         "if" => TokenKind::If,
                         "else" => TokenKind::Else,
@@ -330,13 +328,8 @@ impl<'contents> Lexer<'contents> {
                 (_, '0'..='9' | 'a'..='z') => {
                     return Err(SyntaxError
                         .make_labeled(
-                            self.span_at(self.current_index)
-                                .labeled(format!("{char:?} invalid for base {base:?}")),
-                        )
-                        .with_label(
-                            self.span(start, self.current_index)
-                                .label()
-                                .with_color(Color::BrightBlue),
+                            self.span_from(start)
+                                .labeled(format!("{char:?} is not a valid Roman numeral")),
                         )
                         .into());
                 }
@@ -355,13 +348,8 @@ impl<'contents> Lexer<'contents> {
                 '0'..='9' | 'a'..='z' => {
                     return Err(SyntaxError
                         .make_labeled(
-                            self.span_at(self.current_index)
+                            self.span_from(start)
                                 .labeled(format!("{char:?} is not a valid Roman numeral")),
-                        )
-                        .with_label(
-                            self.span(start, self.current_index)
-                                .label()
-                                .with_color(Color::BrightBlue),
                         )
                         .into());
                 }

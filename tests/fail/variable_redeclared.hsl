@@ -1,0 +1,3 @@
+/// fail: already declared in this scope
+let x = 5
+let x = 10

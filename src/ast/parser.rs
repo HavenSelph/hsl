@@ -4,7 +4,6 @@ use crate::ast::token::{Token, TokenKind};
 use crate::ast::{Node, NodeKind, Operator, Type};
 use crate::report::{Maybe, Report, ReportKind, ReportLevel, ReportSender, SpanToLabel};
 use ParserError::*;
-use ariadne::Color;
 use name_variant::NamedVariant;
 use std::fmt::{Display, Formatter};
 
@@ -156,15 +155,13 @@ impl<'contents> Parser<'contents> {
                 ..
             } => Ok(false),
             token if token.newline_before || token.kind == expect => Ok(false),
-            token => {
-                Err(UnexpectedToken(token.kind)
-                    .make_labeled(
-                        token
-                            .span
-                            .labeled(format!("Expected end of statement or {:?}", expect)),
-                    )
-                    .into())
-            }
+            token => Err(UnexpectedToken(token.kind)
+                .make_labeled(
+                    token
+                        .span
+                        .labeled(format!("Expected end of statement or {:?}", expect)),
+                )
+                .into()),
         }
     }
 
@@ -196,7 +193,7 @@ impl<'contents> Parser<'contents> {
             match self.parse_statement() {
                 Ok(mut stmt) => match self.consume_line_or(closer) {
                     Ok(had_semicolon) => {
-                        if had_semicolon {
+                        if !had_semicolon {
                             stmt.expr = true;
                         }
                         stmts.push(*stmt);
@@ -213,40 +210,6 @@ impl<'contents> Parser<'contents> {
     fn parse_statement(&mut self) -> Maybe<Box<Node>> {
         let Token { kind, span, .. } = self.current;
         let stmt = match kind {
-            TokenKind::Global => {
-                self.advance();
-                let name = self.consume_one(TokenKind::Identifier)?;
-                let mut span = span.extend(name.span);
-                
-                let type_annotation = if self.current.kind == TokenKind::Colon {
-                    self.advance();
-                    let type_name = self.consume_one(TokenKind::Identifier)?;
-                    span = span.extend(type_name.span);
-                    match Type::from_str(type_name.text) {
-                        Some(ty) => Some(ty),
-                        None => {
-                            return Err(SyntaxError(format!("Unknown type: {}", type_name.text))
-                                .make_labeled(type_name.span.label())
-                                .into());
-                        }
-                    }
-                } else {
-                    None
-                };
-                
-                let expr = (self.current.kind == TokenKind::Equals)
-                    .then::<Maybe<_>, _>(|| {
-                        self.advance();
-                        let expr = self.parse_expression(0)?;
-                        span = span.extend(expr.span);
-                        Ok(expr)
-                    })
-                    .transpose()?;
-
-                Ok(NodeKind::GlobalDeclaration(name.text.to_string(), type_annotation, expr, None)
-                    .make(span)
-                    .into())
-            }
             TokenKind::Break => {
                 self.advance();
                 let mut span = span;
@@ -288,7 +251,11 @@ impl<'contents> Parser<'contents> {
                 self.consume_one(TokenKind::Equals)?;
                 let expr = self.parse_expression(0)?;
                 let span = span.extend(expr.span);
-                Ok(NodeKind::LocalDeclaration(name, type_annotation, expr, None).make(span).into())
+                Ok(
+                    NodeKind::LocalDeclaration(name, type_annotation, expr, None)
+                        .make(span)
+                        .into(),
+                )
             }
             TokenKind::Const => {
                 self.advance();
@@ -315,7 +282,9 @@ impl<'contents> Parser<'contents> {
                 self.consume_one(TokenKind::Equals)?;
                 let expr = self.parse_expression(0)?;
                 let span = span.extend(expr.span);
-                Ok(NodeKind::ConstDeclaration(name, type_annotation, expr).make(span).into())
+                Ok(NodeKind::ConstDeclaration(name, type_annotation, expr)
+                    .make(span)
+                    .into())
             }
             TokenKind::Echo => {
                 self.advance();
@@ -463,7 +432,8 @@ impl<'contents> Parser<'contents> {
                             Ok(else_if)
                         } else {
                             let block_start = self.consume_one(TokenKind::LeftBrace)?.span;
-                            let else_block = self.parse_block(block_start, TokenKind::RightBrace)?;
+                            let else_block =
+                                self.parse_block(block_start, TokenKind::RightBrace)?;
                             span = span.extend(else_block.span);
                             Ok(else_block)
                         }
@@ -497,7 +467,9 @@ impl<'contents> Parser<'contents> {
             }
             TokenKind::Identifier => {
                 self.advance();
-                Ok(NodeKind::Identifier(text.to_string(), None).make(span).into())
+                Ok(NodeKind::Identifier(text.to_string(), None)
+                    .make(span)
+                    .into())
             }
             TokenKind::StringLiteral => {
                 self.advance();
@@ -593,9 +565,10 @@ impl<'contents> StringParser<'contents> {
             end: self.span.start + end + 1,
         }
     }
-    fn span_from(&self, start: usize) -> Span {
-        self.span(start, self.current_index)
-    }
+
+    // fn span_from(&self, start: usize) -> Span {
+    //     self.span(start, self.current_index)
+    // }
 
     fn span_at(&self, start: usize) -> Span {
         Span::at(self.span.filename, self.span.start + start + 1)
@@ -635,11 +608,6 @@ impl<'contents> StringParser<'contents> {
                                         .make_labeled(
                                             self.span_at(self.current_index).labeled("here"),
                                         )
-                                        .with_label(
-                                            self.span_from(code_start)
-                                                .label()
-                                                .with_color(Color::Blue),
-                                        )
                                         .into());
                                     }
                                     None => {
@@ -648,11 +616,6 @@ impl<'contents> StringParser<'contents> {
                                         )
                                         .make_labeled(
                                             self.span_at(self.current_index).labeled("here"),
-                                        )
-                                        .with_label(
-                                            self.span_from(code_start)
-                                                .label()
-                                                .with_color(Color::Blue),
                                         )
                                         .into());
                                     }
@@ -663,7 +626,6 @@ impl<'contents> StringParser<'contents> {
                             let val = u16::from_str_radix(code_text, 16).map_err(|e| {
                                 SyntaxError(format!("Invalid Unicode Escape Sequence: {code_text}"))
                                     .make_labeled(code_span.labeled(e))
-                                    .with_label(self.span.label().with_color(Color::Blue))
                             })?;
                             let u_char = char::decode_utf16(vec![val])
                                 .next()
@@ -673,7 +635,6 @@ impl<'contents> StringParser<'contents> {
                                         "Invalid Unicode Escape Sequence: {code_text}"
                                     ))
                                     .make_labeled(code_span.label())
-                                    .with_label(self.span.label().with_color(Color::Blue))
                                 })?;
                             buf.push(u_char);
                         }
@@ -682,7 +643,6 @@ impl<'contents> StringParser<'contents> {
                                 "Invalid Escape Character: {unexpected}"
                             ))
                             .make_labeled(self.span_at(start).label())
-                            .with_label(self.span.label().with_color(Color::Blue))
                             .into());
                         }
                     }

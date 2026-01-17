@@ -14,7 +14,7 @@ pub struct ArgumentCLI {
     pub input: Option<String>,
 
     /// Set minimum level for a report to be shown
-    #[arg(short = 'l', long, value_enum, default_value_t = ReportLevel::Warn)]
+    #[arg(short = 'l', long, value_enum, default_value_t = ReportLevel::Warning)]
     pub report_level: ReportLevel,
 
     /// Show debug information (likely not useful for you)
@@ -26,7 +26,7 @@ pub struct ArgumentCLI {
     pub compact: bool,
 
     /// Disable code context
-    #[arg(long, default_value_t = true, action = clap::ArgAction::SetFalse)]
+    #[arg(long="disable-context", default_value_t = true, action = clap::ArgAction::SetFalse)]
     pub context: bool,
 
     /// Print out the current op codes

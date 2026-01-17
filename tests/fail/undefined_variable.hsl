@@ -1,0 +1,2 @@
+/// fail: Variable 'x' not found
+echo x

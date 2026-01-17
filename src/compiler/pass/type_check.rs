@@ -108,7 +108,7 @@ impl TypeCheckPass {
                 let len = stmts.len();
                 for (i, stmt) in stmts.iter_mut().enumerate() {
                     self.check_node(stmt);
-                    if i == len - 1 && !stmt.expr {
+                    if i == len - 1 && stmt.expr {
                         last_ty = stmt.ty.unwrap_or(Type::Nada);
                     }
                 }
@@ -161,36 +161,6 @@ impl TypeCheckPass {
                 };
 
                 self.declare_variable(name.clone(), final_ty);
-                node.ty = Some(Type::Nada);
-            }
-            NodeKind::GlobalDeclaration(name, declared_ty, expr, _) => {
-                if let Some(e) = expr {
-                    self.check_node(e);
-                    let expr_ty = e.ty.unwrap_or(Type::Unknown);
-
-                    let final_ty = if let Some(declared) = declared_ty {
-                        if expr_ty != Type::Unknown && expr_ty != *declared {
-                            self.reporter.report(
-                                TypeCheckError::TypeMismatch {
-                                    expected: *declared,
-                                    found: expr_ty,
-                                }
-                                .make_labeled(e.span.label())
-                                .finish()
-                                .into(),
-                            );
-                        }
-                        *declared
-                    } else {
-                        expr_ty
-                    };
-
-                    self.declare_variable(name.clone(), final_ty);
-                } else if let Some(declared) = declared_ty {
-                    self.declare_variable(name.clone(), *declared);
-                } else {
-                    self.declare_variable(name.clone(), Type::Nada);
-                }
                 node.ty = Some(Type::Nada);
             }
             NodeKind::ConstDeclaration(name, declared_ty, expr) => {
@@ -269,7 +239,7 @@ impl TypeCheckPass {
                     self.check_node(else_b);
                     let else_ty = else_b.ty.unwrap_or(Type::Nada);
 
-                    if !node.expr {
+                    if node.expr {
                         node.ty = Some(Type::Nada);
                     } else if then_ty == else_ty {
                         node.ty = Some(then_ty);
@@ -286,7 +256,7 @@ impl TypeCheckPass {
                         );
                         node.ty = Some(Type::Unknown);
                     }
-                } else if !node.expr {
+                } else if node.expr {
                     node.ty = Some(Type::Nada);
                 } else {
                     self.reporter.report(

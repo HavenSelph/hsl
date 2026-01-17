@@ -5,6 +5,10 @@ use std::fmt::Display;
 
 enum DeadCodeWarning {
     EffectlessExpression,
+    DeadThenBranch,
+    DeadElseBranch,
+    ConditionAlways(bool),
+    UnreachableCode,
 }
 
 impl Display for DeadCodeWarning {
@@ -12,6 +16,24 @@ impl Display for DeadCodeWarning {
         match self {
             DeadCodeWarning::EffectlessExpression => {
                 write!(f, "Expression has no effect and will be removed")
+            }
+            DeadCodeWarning::DeadThenBranch => {
+                write!(
+                    f,
+                    "Then branch will never execute (condition is always false)"
+                )
+            }
+            DeadCodeWarning::DeadElseBranch => {
+                write!(
+                    f,
+                    "Else branch will never execute (condition is always true)"
+                )
+            }
+            DeadCodeWarning::ConditionAlways(b) => {
+                write!(f, "Condition is always {b}")
+            }
+            DeadCodeWarning::UnreachableCode => {
+                write!(f, "Unreachable code detected and will be removed")
             }
         }
     }
@@ -23,7 +45,7 @@ impl ReportKind for DeadCodeWarning {
     }
 
     fn level(&self) -> ReportLevel {
-        ReportLevel::Warn
+        ReportLevel::Warning
     }
 }
 
@@ -34,74 +56,6 @@ pub struct DeadCodePass {
 impl DeadCodePass {
     pub fn new(reporter: ReportSender) -> Self {
         Self { reporter }
-    }
-
-    fn process_node(&mut self, node: &mut Node) {
-        match &mut node.kind {
-            NodeKind::Block(stmts) => {
-                let mut i = 0;
-                while i < stmts.len() {
-                    self.process_node(&mut stmts[i]);
-
-                    if stmts[i].expr && self.is_effectless(&stmts[i]) {
-                        self.reporter.report(
-                            DeadCodeWarning::EffectlessExpression
-                                .make_labeled(stmts[i].span.label())
-                                .finish()
-                                .into(),
-                        );
-                        stmts.remove(i);
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            NodeKind::If(condition, then_block, else_block) => {
-                self.process_node(condition);
-                self.process_node(then_block);
-                if let Some(else_b) = else_block {
-                    self.process_node(else_b);
-                }
-            }
-            NodeKind::Loop(condition, body) => {
-                if let Some(cond) = condition {
-                    self.process_node(cond);
-                }
-                self.process_node(body);
-            }
-            NodeKind::LocalDeclaration(_, _, expr, _) => {
-                self.process_node(expr);
-            }
-            NodeKind::GlobalDeclaration(_, _, expr, _) => {
-                if let Some(e) = expr {
-                    self.process_node(e);
-                }
-            }
-            NodeKind::Echo(expr) => {
-                self.process_node(expr);
-            }
-            NodeKind::Assert(expr, _) => {
-                self.process_node(expr);
-            }
-            NodeKind::Break(value) => {
-                if let Some(val) = value {
-                    self.process_node(val);
-                }
-            }
-            NodeKind::UnaryOperation(_, operand) => {
-                self.process_node(operand);
-            }
-            NodeKind::BinaryOperation(_, lhs, rhs) => {
-                self.process_node(lhs);
-                self.process_node(rhs);
-            }
-            NodeKind::CompoundComparison(_, operands) => {
-                for operand in operands.iter_mut() {
-                    self.process_node(operand);
-                }
-            }
-            _ => {}
-        }
     }
 
     fn is_effectless(&self, node: &Node) -> bool {
@@ -150,10 +104,140 @@ impl DeadCodePass {
             _ => false,
         }
     }
+
+    fn is_diverging(&self, node: &Node) -> bool {
+        match &node.kind {
+            NodeKind::Break(_) | NodeKind::Continue => true,
+            NodeKind::Block(stmts) => stmts.iter().any(|s| self.is_diverging(s)),
+            NodeKind::If(_, then_block, Some(else_block)) => {
+                self.is_diverging(then_block) && self.is_diverging(else_block)
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Pass for DeadCodePass {
+    fn visit_block(&mut self, node: &mut Node) {
+        if let NodeKind::Block(stmts) = &mut node.kind {
+            let mut found_diverging = None;
+            let mut i = 0;
+
+            while i < stmts.len() {
+                self.visit(&mut stmts[i]);
+
+                // Check for unreachable code after diverging statement
+                if found_diverging.is_none() && self.is_diverging(&stmts[i]) {
+                    found_diverging = Some(i);
+                }
+
+                // Remove effectless expressions (expr=true means it's an expression)
+                if !stmts[i].expr && self.is_effectless(&stmts[i]) {
+                    self.reporter.report(
+                        DeadCodeWarning::EffectlessExpression
+                            .make_labeled(stmts[i].span.label())
+                            .finish()
+                            .into(),
+                    );
+                    stmts.remove(i);
+                // Remove empty blocks
+                } else if matches!(&stmts[i].kind, NodeKind::Block(inner) if inner.is_empty()) {
+                    stmts.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+
+            // Remove unreachable code after diverging statement
+            if let Some(_diverge_idx) = found_diverging {
+                // Recalculate the actual index after potential removals
+                let actual_idx = stmts.iter().position(|s| self.is_diverging(s));
+                if let Some(idx) = actual_idx {
+                    if idx + 1 < stmts.len() {
+                        for stmt in stmts.iter().skip(idx + 1) {
+                            self.reporter.report(
+                                DeadCodeWarning::UnreachableCode
+                                    .make_labeled(stmt.span.label())
+                                    .finish()
+                                    .into(),
+                            );
+                        }
+                        stmts.truncate(idx + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    fn visit_if(&mut self, node: &mut Node) {
+        if let NodeKind::If(condition, then_block, else_block) = &mut node.kind {
+            self.visit(condition);
+            self.visit(then_block);
+            if let Some(else_b) = else_block {
+                self.visit(else_b);
+            }
+
+            if let NodeKind::BooleanLiteral(val) = condition.kind {
+                if val {
+                    self.reporter.report(
+                        DeadCodeWarning::DeadElseBranch
+                            .make_labeled(
+                                else_block
+                                    .as_ref()
+                                    .map(|b| b.span)
+                                    .unwrap_or(condition.span)
+                                    .label(),
+                            )
+                            .finish()
+                            .into(),
+                    );
+                    let replacement = std::mem::replace(
+                        then_block,
+                        Box::new(NodeKind::BooleanLiteral(false).make(node.span)),
+                    );
+                    node.kind = replacement.kind;
+                    node.ty = replacement.ty;
+                } else {
+                    self.reporter.report(
+                        DeadCodeWarning::DeadThenBranch
+                            .make_labeled(then_block.span.label())
+                            .finish()
+                            .into(),
+                    );
+                    if let Some(else_b) = else_block.take() {
+                        node.kind = else_b.kind;
+                        node.ty = else_b.ty;
+                    } else {
+                        node.kind = NodeKind::Block(vec![]);
+                        node.ty = Some(crate::ast::Type::Nada);
+                    }
+                }
+            }
+        }
+    }
+
+    fn visit_loop(&mut self, node: &mut Node) {
+        if let NodeKind::Loop(condition, body) = &mut node.kind {
+            if let Some(cond) = condition {
+                self.visit(cond);
+
+                if let NodeKind::BooleanLiteral(b) = cond.kind {
+                    self.reporter.report(
+                        DeadCodeWarning::ConditionAlways(b)
+                            .make_labeled(cond.span.label())
+                            .finish()
+                            .into(),
+                    );
+                    node.kind = NodeKind::Block(vec![]);
+                    node.ty = Some(crate::ast::Type::Nada);
+                    return;
+                }
+            }
+            self.visit(body);
+        }
+    }
+
     fn run(&mut self, node: &mut Node) {
-        self.process_node(node);
+        self.visit(node);
     }
 }

@@ -11,7 +11,6 @@ pub mod token;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VariableKind {
     Local,
-    Global,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +208,6 @@ pub enum NodeKind {
     BinaryOperation(Operator, Box<Node>, Box<Node>),
     CompoundComparison(Vec<Operator>, Vec<Box<Node>>),
     LocalDeclaration(String, Option<Type>, Box<Node>, Option<u16>),
-    GlobalDeclaration(String, Option<Type>, Option<Box<Node>>, Option<u16>),
     ConstDeclaration(String, Option<Type>, Box<Node>),
     Identifier(String, Option<ResolvedVar>),
     StringLiteral(String),
@@ -368,16 +366,6 @@ impl<'a> Display for NodeFormatter<'a> {
                 write!(f, "{{\n{}\n}}", self.child(then_block))?;
                 if let Some(else_block) = else_block {
                     write!(f, "else {{\n{}\n}}", self.child(else_block))?;
-                }
-            }
-            NodeKind::GlobalDeclaration(name, ty, expr, _) => {
-                write!(f, "({name:?}")?;
-                if let Some(ty) = ty {
-                    write!(f, ": {ty}")?;
-                }
-                write!(f, ")")?;
-                if let Some(expr) = expr {
-                    write!(f, " {{\n{}\n}}", self.child(expr))?;
                 }
             }
             NodeKind::LocalDeclaration(name, ty, expr, _) => {

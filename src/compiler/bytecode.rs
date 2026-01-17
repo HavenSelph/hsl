@@ -33,10 +33,8 @@ pub enum OpCode {
     False = 0x1c,
 
     // 0x20-0x2f Variables
-    LoadLocal = 0x20,  // Next u16 represents an index
-    SetLocal = 0x21,   // Next u16 represents an index
-    LoadGlobal = 0x22, // Read string for key
-    SetGlobal = 0x23,  // Read string for key
+    LoadLocal = 0x20, // Next u16 represents an index
+    SetLocal = 0x21,  // Next u16 represents an index
 
     PushScope = 0x2a,
     PopScope = 0x2f,
@@ -262,10 +260,6 @@ impl Chunk {
             OpCode::LoadLocal | OpCode::SetLocal => {
                 let idx = self.read_u16(offset) as usize;
                 println!(" {:#04x} {idx}", idx);
-            }
-            OpCode::LoadGlobal | OpCode::SetGlobal => {
-                let key = self.read_string(offset);
-                println!(" {:#04x} {key:?}", key.len());
             }
             OpCode::Jump | OpCode::JumpIfFalse | OpCode::Loop => {
                 let jump_offset = self.read_u16(offset) as usize;
